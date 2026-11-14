@@ -86,6 +86,45 @@ class StreamlitAppTests(unittest.TestCase):
         )
         self.assertFalse(self.app.exception)
 
+    def test_light_themes_use_bright_surfaces_and_readable_map_labels(self):
+        light_palettes = {
+            "Solaris": ("#1f2937", "#e8eee8", "#334155", "#14532d"),
+            "Botanical": ("#172b26", "#e4eee2", "#29443a", "#14532d"),
+            "Daybreak": ("#2b1d27", "#f0e9e7", "#453849", "#881337"),
+        }
+        for name, (
+            text_color,
+            land_color,
+            map_text_color,
+            alert_text_color,
+        ) in light_palettes.items():
+            with self.subTest(theme=name):
+                self.app.selectbox(key="visual_theme").select(name).run()
+                figure = json.loads(self.app.get("plotly_chart")[0].proto.spec)
+                self.assertEqual(
+                    figure["layout"]["geo"]["landcolor"],
+                    land_color,
+                )
+                self.assertEqual(
+                    figure["data"][3]["textfont"]["color"],
+                    map_text_color,
+                )
+                self.assertTrue(
+                    any(
+                        f'--mission-text: {text_color}' in item.value
+                        for item in self.app.markdown
+                    )
+                )
+                self.assertTrue(
+                    any(
+                        '[data-testid="stSelectbox"] [data-baseweb="select"] > div > div'
+                        in item.value
+                        and f"color: {alert_text_color} !important" in item.value
+                        for item in self.app.markdown
+                    )
+                )
+                self.assertFalse(self.app.exception)
+
     def test_progress_panel_remains_visible_after_confirming_phase_one(self):
         self.app.selectbox(key="launch_site_picker").select(
             "Guiana Space Centre"

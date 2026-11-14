@@ -39,27 +39,144 @@ THEMES = {
         "accent_secondary": "#6d8cff",
         "background": "radial-gradient(ellipse at 12% 0%, #142f3c 0%, #101723 40%, #0b1018 100%)",
         "panel": "rgba(16, 28, 40, 0.88)",
+        "sidebar_end": "rgba(7, 12, 20, 0.96)",
+        "metric_end": "rgba(10, 15, 25, 0.58)",
+        "control_end": "rgba(18, 24, 36, 0.84)",
         "border": "rgba(85, 242, 194, 0.26)",
         "text": "#e9f4f7",
         "muted": "#a7bdc8",
+        "button_text": "#07121a",
+        "map_land": "#1e222a",
+        "map_ocean": "#0e1117",
+        "map_country": "#383e4a",
+        "map_coast": "#383e4a",
+        "map_text": "#f0f4fa",
+        "map_marker": "#9aabc0",
+        "map_marker_line": "#4b5a70",
+        "schematic_end": "rgba(8,13,22,.72)",
+        "alert_background": "#103c2d",
+        "alert_text": "#d1fae5",
+        "alert_border": "#34d399",
     },
     "Solar Flare": {
         "accent": "#ffc857",
         "accent_secondary": "#ff6d8a",
         "background": "radial-gradient(ellipse at 12% 0%, #40252a 0%, #211923 42%, #10121a 100%)",
         "panel": "rgba(39, 29, 34, 0.9)",
+        "sidebar_end": "rgba(7, 12, 20, 0.96)",
+        "metric_end": "rgba(10, 15, 25, 0.58)",
+        "control_end": "rgba(18, 24, 36, 0.84)",
         "border": "rgba(255, 200, 87, 0.28)",
         "text": "#fff3e7",
         "muted": "#d4b7aa",
+        "button_text": "#07121a",
+        "map_land": "#1e222a",
+        "map_ocean": "#0e1117",
+        "map_country": "#383e4a",
+        "map_coast": "#383e4a",
+        "map_text": "#f0f4fa",
+        "map_marker": "#9aabc0",
+        "map_marker_line": "#4b5a70",
+        "schematic_end": "rgba(8,13,22,.72)",
+        "alert_background": "#463219",
+        "alert_text": "#fff3c4",
+        "alert_border": "#fbbf24",
     },
     "Arctic Pulse": {
         "accent": "#68d9ff",
         "accent_secondary": "#b18cff",
         "background": "radial-gradient(ellipse at 12% 0%, #1d2c49 0%, #151b30 42%, #0c111d 100%)",
         "panel": "rgba(24, 31, 51, 0.9)",
+        "sidebar_end": "rgba(7, 12, 20, 0.96)",
+        "metric_end": "rgba(10, 15, 25, 0.58)",
+        "control_end": "rgba(18, 24, 36, 0.84)",
         "border": "rgba(104, 217, 255, 0.28)",
         "text": "#edf4ff",
         "muted": "#b0bfd8",
+        "button_text": "#07121a",
+        "map_land": "#1e222a",
+        "map_ocean": "#0e1117",
+        "map_country": "#383e4a",
+        "map_coast": "#383e4a",
+        "map_text": "#f0f4fa",
+        "map_marker": "#9aabc0",
+        "map_marker_line": "#4b5a70",
+        "schematic_end": "rgba(8,13,22,.72)",
+        "alert_background": "#1e3150",
+        "alert_text": "#e0f2fe",
+        "alert_border": "#38bdf8",
+    },
+    "Solaris": {
+        "accent": "#9a3412",
+        "accent_secondary": "#7e22ce",
+        "background": "linear-gradient(135deg, #fff7ed 0%, #fef3c7 48%, #fdf2f8 100%)",
+        "panel": "rgba(255, 255, 255, 0.92)",
+        "sidebar_end": "rgba(255, 255, 255, 0.96)",
+        "metric_end": "rgba(255, 255, 255, 0.74)",
+        "control_end": "rgba(255, 247, 237, 0.92)",
+        "border": "rgba(154, 52, 18, 0.24)",
+        "text": "#1f2937",
+        "muted": "#475569",
+        "button_text": "#ffffff",
+        "map_land": "#e8eee8",
+        "map_ocean": "#dceef8",
+        "map_country": "#b8c5d3",
+        "map_coast": "#91a4b8",
+        "map_text": "#334155",
+        "map_marker": "#64748b",
+        "map_marker_line": "#475569",
+        "schematic_end": "rgba(255,255,255,.72)",
+        "alert_background": "#dcfce7",
+        "alert_text": "#14532d",
+        "alert_border": "#86efac",
+    },
+    "Botanical": {
+        "accent": "#047857",
+        "accent_secondary": "#1d4ed8",
+        "background": "linear-gradient(135deg, #ecfdf5 0%, #f0fdf4 46%, #eff6ff 100%)",
+        "panel": "rgba(255, 255, 255, 0.93)",
+        "sidebar_end": "rgba(255, 255, 255, 0.97)",
+        "metric_end": "rgba(240, 253, 244, 0.82)",
+        "control_end": "rgba(239, 246, 255, 0.92)",
+        "border": "rgba(4, 120, 87, 0.24)",
+        "text": "#172b26",
+        "muted": "#405b53",
+        "button_text": "#ffffff",
+        "map_land": "#e4eee2",
+        "map_ocean": "#dceff2",
+        "map_country": "#b6cbbf",
+        "map_coast": "#8fa99b",
+        "map_text": "#29443a",
+        "map_marker": "#647c72",
+        "map_marker_line": "#456257",
+        "schematic_end": "rgba(240,253,244,.8)",
+        "alert_background": "#dcfce7",
+        "alert_text": "#14532d",
+        "alert_border": "#86efac",
+    },
+    "Daybreak": {
+        "accent": "#be123c",
+        "accent_secondary": "#6d28d9",
+        "background": "linear-gradient(135deg, #fff1f2 0%, #fff7ed 48%, #f5f3ff 100%)",
+        "panel": "rgba(255, 255, 255, 0.93)",
+        "sidebar_end": "rgba(255, 255, 255, 0.97)",
+        "metric_end": "rgba(255, 241, 242, 0.82)",
+        "control_end": "rgba(245, 243, 255, 0.94)",
+        "border": "rgba(190, 18, 60, 0.22)",
+        "text": "#2b1d27",
+        "muted": "#5c4654",
+        "button_text": "#ffffff",
+        "map_land": "#f0e9e7",
+        "map_ocean": "#e8eefb",
+        "map_country": "#c8bfd0",
+        "map_coast": "#a69bb2",
+        "map_text": "#453849",
+        "map_marker": "#766579",
+        "map_marker_line": "#56475d",
+        "schematic_end": "rgba(255,241,242,.8)",
+        "alert_background": "#ffe4e6",
+        "alert_text": "#881337",
+        "alert_border": "#fda4af",
     },
 }
 
@@ -237,8 +354,12 @@ def _reset_mission() -> None:
     st.session_state.menu_sound_pending = "menu"
 
 
-def _build_launch_map(selected_site: Optional[str], accent: str) -> go.Figure:
-    """Create the dark, selectable world map of launch facilities."""
+def _build_launch_map(
+    selected_site: Optional[str],
+    theme: dict[str, str],
+) -> go.Figure:
+    """Create a selectable launch-site map styled for the selected theme."""
+    accent = theme["accent"]
     fig = go.Figure()
     fig.add_trace(
         go.Scattergeo(
@@ -273,7 +394,10 @@ def _build_launch_map(selected_site: Optional[str], accent: str) -> go.Figure:
             mode="markers",
             marker={
                 "size": [27 if site == selected_site else 10 for site in sites],
-                "color": [accent if site == selected_site else "#9aabc0" for site in sites],
+                "color": [
+                    accent if site == selected_site else theme["map_marker"]
+                    for site in sites
+                ],
                 "opacity": [0.26 if site == selected_site else 0.78 for site in sites],
                 "line": {"width": 0},
             },
@@ -292,15 +416,18 @@ def _build_launch_map(selected_site: Optional[str], accent: str) -> go.Figure:
                 for site in sites
             ],
             textposition=["top center" if lat > 15 else "bottom center" for lat in lats],
-            textfont={"size": 10, "color": "#f0f4fa"},
+            textfont={"size": 10, "color": theme["map_text"]},
             marker={
                 "size": [13 if site == selected_site else 8 for site in sites],
                 "color": [
-                    accent if site == selected_site else "#b8c5d6"
+                    accent if site == selected_site else theme["map_marker"]
                     for site in sites
                 ],
                 "line": {
-                    "color": [accent if site == selected_site else "#4b5a70" for site in sites],
+                    "color": [
+                        accent if site == selected_site else theme["map_marker_line"]
+                        for site in sites
+                    ],
                     "width": [3 if site == selected_site else 1 for site in sites],
                 },
             },
@@ -318,15 +445,15 @@ def _build_launch_map(selected_site: Optional[str], accent: str) -> go.Figure:
         geo={
             "projection_type": "natural earth",
             "showland": True,
-            "landcolor": "#1e222a",
+            "landcolor": theme["map_land"],
             "showocean": True,
-            "oceancolor": "#0e1117",
+            "oceancolor": theme["map_ocean"],
             "showcountries": True,
-            "countrycolor": "#383e4a",
+            "countrycolor": theme["map_country"],
             "bgcolor": "rgba(0,0,0,0)",
             "showframe": False,
             "showcoastlines": True,
-            "coastlinecolor": "#383e4a",
+            "coastlinecolor": theme["map_coast"],
             "lataxis": {"range": [-60, 82], "showgrid": False},
             "lonaxis": {"showgrid": False},
         },
@@ -728,7 +855,7 @@ def _rocket_schematic(
     return dedent(f"""
     <div style="border:1px solid {theme["border"]}; border-radius:16px;
       padding:12px 16px 8px; margin:4px 0 18px;
-      background:linear-gradient(145deg,{theme["panel"]},rgba(8,13,22,.72));">
+      background:linear-gradient(145deg,{theme["panel"]},{theme["schematic_end"]});">
       <div style="font:600 0.9rem sans-serif;color:{theme["muted"]};
         letter-spacing:.12em;text-transform:uppercase;margin:2px 4px 0;">
         Live spacecraft schematic</div>
@@ -902,8 +1029,9 @@ def _apply_theme(theme: dict[str, str]) -> None:
         }}
         [data-testid="stHeader"] {{ background: transparent; }}
         [data-testid="stSidebar"] {{
-          background: linear-gradient(165deg, var(--mission-panel), rgba(7, 12, 20, 0.96));
+          background: linear-gradient(165deg, var(--mission-panel), {theme["sidebar_end"]});
           border-right: 1px solid var(--mission-border);
+          color: var(--mission-text);
         }}
         [data-testid="stMarkdownContainer"] p,
         [data-testid="stMarkdownContainer"] li,
@@ -920,7 +1048,7 @@ def _apply_theme(theme: dict[str, str]) -> None:
           -webkit-text-fill-color: transparent;
         }}
         [data-testid="stMetric"] {{
-          background: linear-gradient(145deg, var(--mission-panel), rgba(10, 15, 25, 0.58));
+          background: linear-gradient(145deg, var(--mission-panel), {theme["metric_end"]});
           border: 1px solid var(--mission-border);
           border-radius: 14px;
           padding: 14px 16px;
@@ -928,7 +1056,7 @@ def _apply_theme(theme: dict[str, str]) -> None:
         [data-testid="stMetricLabel"] {{ color: var(--mission-muted); }}
         [data-testid="stMetricValue"] {{ color: var(--mission-text); }}
         div.stButton > button[kind="primary"] {{
-          color: #07121a;
+          color: {theme["button_text"]};
           border: 0;
           border-radius: 10px;
           background: linear-gradient(100deg, var(--mission-accent), var(--mission-accent-secondary));
@@ -939,7 +1067,7 @@ def _apply_theme(theme: dict[str, str]) -> None:
           color: var(--mission-text);
           border: 1px solid var(--mission-border);
           border-radius: 10px;
-          background: linear-gradient(120deg, var(--mission-panel), rgba(18, 24, 36, 0.84));
+          background: linear-gradient(120deg, var(--mission-panel), {theme["control_end"]});
         }}
         [data-testid="stProgressBar"] > div > div {{
           background: linear-gradient(90deg, var(--mission-accent), var(--mission-accent-secondary));
@@ -947,6 +1075,38 @@ def _apply_theme(theme: dict[str, str]) -> None:
         [data-testid="stSelectbox"] [data-baseweb="select"] > div {{
           border-color: var(--mission-border);
           background-color: var(--mission-panel);
+          color: var(--mission-text);
+        }}
+        [data-testid="stSelectbox"] [data-baseweb="select"] > div > div,
+        [data-testid="stSelectbox"] [data-baseweb="select"] > div > div:last-child {{
+          background-color: transparent !important;
+          color: var(--mission-text) !important;
+        }}
+        [data-testid="stSelectbox"] [data-baseweb="select"] svg {{
+          color: var(--mission-text) !important;
+          fill: var(--mission-text) !important;
+        }}
+        [data-baseweb="popover"],
+        [data-baseweb="popover"] [role="option"] {{
+          background-color: {theme["panel"]};
+          color: var(--mission-text);
+        }}
+        [data-testid="stAlert"] {{
+          background-color: {theme["alert_background"]} !important;
+          border: 1px solid {theme["alert_border"]} !important;
+          color: {theme["alert_text"]} !important;
+        }}
+        [data-testid="stAlert"] [data-baseweb="notification"] {{
+          background-color: {theme["alert_background"]} !important;
+          color: {theme["alert_text"]} !important;
+        }}
+        [data-testid="stAlert"] [data-testid="stMarkdownContainer"],
+        [data-testid="stAlert"] [data-testid="stMarkdownContainer"] p {{
+          color: {theme["alert_text"]} !important;
+        }}
+        input, textarea {{
+          color: var(--mission-text) !important;
+          background-color: var(--mission-panel) !important;
         }}
         </style>
         """,
@@ -1667,7 +1827,7 @@ with configuration:
         )
 
         map_event = st.plotly_chart(
-            _build_launch_map(st.session_state.selected_launch_site, theme["accent"]),
+            _build_launch_map(st.session_state.selected_launch_site, theme),
             key="launch_site_map",
             on_select="rerun",
             selection_mode="points",
