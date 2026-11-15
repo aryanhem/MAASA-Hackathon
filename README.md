@@ -52,6 +52,23 @@ Responsive Canvas Physics: To keep the Streamlit UI responsive and avoid laggy r
 
 All of our core math, typed calculation functions, and part stats live in `mission_design.py`. Parts start unselected (contributing 0 kg and 0 upthrust) until you build your ship.
 
+### Destination Modifiers & Hull Requirements
+
+To reflect the hazards of different environments in our research notes, we enforced minimum hull tiers and difficulty multipliers for each destination:
+
+| Destination | Difficulty Modifier | Minimum Required Hull |
+| :--- | :---: | :--- |
+| **Moon** | 0.7 | Lightweight Aluminum Frame |
+| **Mars** | 1.0 | Lightweight Aluminum Frame |
+| **Mercury** | 1.2 | Carbon-Composite Shell |
+| **Uranus** | 1.6 | Reinforced Titanium-Alloy Hull |
+| **Venus** | 1.7 | Carbon-Composite Shell |
+| **Neptune** | 1.8 | Reinforced Titanium-Alloy Hull *(extended for ice giants)* |
+| **Saturn** | 2.0 | Reinforced Titanium-Alloy Hull |
+| **Jupiter** | 2.1 | Reinforced Titanium-Alloy Hull |
+
+*(Note: Our Heavy-Duty Deep Space Pod uses the 800 kg mass value from our team research notes, and the Hardcore Jupiter preset comes pre-loaded with the reinforced hull, standard solar arrays, basic sensors, passive MLI insulation, optical imaging suite, heavy-duty engine cluster, and deep-space fuel pod).*
+
 ## Simulation Fidelity & Engineering Assumptions
 
 We designed this project as an educational arcade game rather than an aerospace flight-design tool, so we intentionally simplified the physics to keep gameplay fun and predictable:
