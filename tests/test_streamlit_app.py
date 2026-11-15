@@ -15,6 +15,77 @@ class StreamlitAppTests(unittest.TestCase):
         self.app = AppTest.from_file(str(app_path), default_timeout=30).run()
         self.assertFalse(self.app.exception)
 
+    def _launch_slingshot(self, preset_key="hardcore_preset"):
+        self.app.sidebar.button(key=preset_key).click().run()
+        self.assertFalse(
+            self.app.button(key="initiate_launch_sequence").disabled
+        )
+        self.app.button(key="initiate_launch_sequence").click().run()
+        self.assertEqual(self.app.session_state["mission_phase"], 3)
+        self.assertEqual(self.app.session_state["flight_status"], "slingshot")
+
+    def _submit_slingshot_vector(self, velocity_x, velocity_y):
+        self.app.session_state["gravity_slingshot"] = {
+            "kind": "launch",
+            "attempt_id": self.app.session_state["slingshot_attempt_id"],
+            "velocity_x": velocity_x,
+            "velocity_y": velocity_y,
+        }
+        self.app.run()
+
+    def _submit_landing_step(self, duration_s, thrusting):
+        event_id = self.app.session_state["landing_last_event_id"] + 1
+        self.app.session_state["landing_canvas"] = {
+            "kind": "step",
+            "event_id": event_id,
+            "duration_s": duration_s,
+            "thrusting": thrusting,
+        }
+        self.app.run()
+
+    def _submit_landing_snapshot(
+        self,
+        event_id,
+        altitude_m,
+        velocity_m_s,
+        fuel_remaining_kg,
+        used_thrust,
+    ):
+        self.app.session_state["landing_canvas"] = {
+            "kind": "snapshot",
+            "event_id": event_id,
+            "altitude_m": altitude_m,
+            "velocity_m_s": velocity_m_s,
+            "fuel_remaining_kg": fuel_remaining_kg,
+            "used_thrust": used_thrust,
+        }
+        self.app.run()
+
+    def _submit_successful_slingshot(self):
+        destination = self.app.session_state["mission_destination"]
+        launch_vectors = {
+            "Moon": (12, 2),
+            "Mercury": (14, 0),
+            "Venus": (14, 0),
+            "Mars": (14, 0),
+            "Jupiter": (18, 4),
+            "Saturn": (20, 7),
+            "Uranus": (11, -2),
+            "Neptune": (10, -2),
+        }
+        self._submit_slingshot_vector(*launch_vectors[destination])
+
+    def _advance_to_arrival(self, preset_key="hardcore_preset"):
+        self._launch_slingshot(preset_key)
+        self._submit_successful_slingshot()
+        self.assertEqual(
+            self.app.session_state["slingshot_outcome"]["status"],
+            "success",
+        )
+        self.app.button(key="continue_to_phase_four").click().run()
+        self.assertEqual(self.app.session_state["mission_phase"], 4)
+        self.assertEqual(self.app.session_state["flight_status"], "arrival")
+
     def _sound_payload(self):
         match = None
         for frame in self.app.get("iframe"):
@@ -206,15 +277,32 @@ class StreamlitAppTests(unittest.TestCase):
         ElementTree.fromstring(markup[svg_start:svg_end])
         self.assertFalse(self.app.exception)
 
-    def test_phase_three_launch_animates_trajectory_and_opens_landing_controls(self):
-        self.app.sidebar.button(key="hardcore_preset").click().run()
-        self.assertFalse(
-            self.app.button(key="initiate_launch_sequence").disabled
+    def test_phase_three_slingshot_advances_to_phase_four_and_five(self):
+        self._launch_slingshot()
+        self.assertTrue(
+            any(
+                item.value == "Phase 3 — Gravitational Trajectory Slingshot"
+                for item in self.app.subheader
+            )
+        )
+        self.assertEqual(
+            self.app.session_state["slingshot_outcome"],
+            None,
+        )
+        self.assertIn("gravity_slingshot", self.app.session_state)
+        self.assertTrue(
+            any("Drag backward from the rocket" in item.value
+                for item in self.app.caption)
         )
 
-        self.app.button(key="initiate_launch_sequence").click().run()
+        self._submit_successful_slingshot()
+        self.assertEqual(
+            self.app.session_state["slingshot_outcome"]["status"],
+            "success",
+        )
+        self.app.button(key="continue_to_phase_four").click().run()
 
-        self.assertEqual(self.app.session_state["mission_phase"], 3)
+        self.assertEqual(self.app.session_state["mission_phase"], 4)
         self.assertEqual(self.app.session_state["flight_status"], "arrival")
         self.assertEqual(self.app.session_state["landing_altitude_m"], 180)
         self.assertLess(self.app.session_state["flight_fuel_remaining_kg"],
@@ -243,96 +331,312 @@ class StreamlitAppTests(unittest.TestCase):
         sounds_during_flight = self._sound_payloads()
         self.assertTrue(sounds_during_flight)
         self.app.button(key="begin_landing").click().run()
+        self.assertEqual(self.app.session_state["mission_phase"], 5)
         self.assertEqual(self.app.session_state["flight_status"], "landing")
-        self.assertTrue(
-            any("gravity is capped" in item.value for item in self.app.markdown)
-        )
-        self.assertGreater(len(self.app.metric), 3)
-        self.app.button(key="burn_retro_thrust")
-        self.app.button(key="coast_descent")
-        self.assertTrue(
-            any("SAFE ZONE" in item.value for item in self.app.markdown)
-        )
+        self.assertIn("landing_canvas", self.app.session_state)
         starting_fuel = self.app.session_state["flight_fuel_remaining_kg"]
-        self.app.button(key="burn_retro_thrust").click().run()
+        starting_action_id = self.app.session_state["landing_action_id"]
+        self._submit_landing_step(0.2, True)
         self.assertEqual(self.app.session_state["flight_status"], "landing")
-        self.assertEqual(self.app.session_state["landing_velocity_m_s"], 0)
+        self.assertLess(self.app.session_state["landing_velocity_m_s"], 8)
         self.assertLess(self.app.session_state["landing_altitude_m"], 180)
+        self.assertEqual(self.app.session_state["landing_last_action"], "burn")
+        self.assertEqual(
+            self.app.session_state["landing_action_id"],
+            starting_action_id + 1,
+        )
         self.assertLess(
             self.app.session_state["flight_fuel_remaining_kg"],
             starting_fuel,
         )
         thrust_sound = self._sound_payloads()[-1]
-        self.app.button(key="coast_descent").click().run()
+        self._submit_landing_step(0.2, False)
         coast_sound = self._sound_payloads()[-1]
         self.assertNotEqual(thrust_sound, coast_sound)
+        self.assertEqual(self.app.session_state["landing_last_action"], "coast")
+        self.assertEqual(
+            self.app.session_state["landing_action_id"],
+            starting_action_id + 2,
+        )
         self.app.button(key="back_to_assembly").click().run()
         self.assertEqual(self.app.session_state["mission_phase"], 2)
         self.assertEqual(self.app.session_state["flight_status"], "assembly")
         self.assertEqual(self.app.session_state["mission_destination"], "Jupiter")
         self.assertFalse(self.app.exception)
 
+    def test_slingshot_failure_retry_and_success_are_session_state_driven(self):
+        self._launch_slingshot()
+        self._submit_slingshot_vector(0, 12)
+
+        self.assertEqual(
+            self.app.session_state["slingshot_outcome"]["status"],
+            "failure",
+        )
+        self.assertEqual(self.app.session_state["mission_phase"], 3)
+        first_attempt = self.app.session_state["slingshot_attempt_id"]
+        self.app.session_state["gravity_slingshot"] = {
+            "kind": "retry",
+            "attempt_id": first_attempt,
+        }
+        self.app.run()
+
+        self.assertEqual(
+            self.app.session_state["slingshot_attempt_id"],
+            first_attempt + 1,
+        )
+        self.assertEqual(self.app.session_state["slingshot_attempt_number"], 2)
+        self.assertIsNone(self.app.session_state["slingshot_outcome"])
+        self._submit_successful_slingshot()
+        self.assertEqual(
+            self.app.session_state["slingshot_outcome"]["status"],
+            "success",
+        )
+        self.assertFalse(self.app.exception)
+
+    def test_slingshot_second_failure_shows_diagnostic_scorecard(self):
+        self._launch_slingshot()
+        self._submit_slingshot_vector(0, 12)
+        first_attempt = self.app.session_state["slingshot_attempt_id"]
+        self.app.session_state["gravity_slingshot"] = {
+            "kind": "retry",
+            "attempt_id": first_attempt,
+        }
+        self.app.run()
+        self._submit_slingshot_vector(0, 12)
+
+        self.assertEqual(self.app.session_state["slingshot_attempt_number"], 2)
+        self.assertEqual(
+            self.app.session_state["slingshot_outcome"]["status"],
+            "failure",
+        )
+        self.assertTrue(
+            any(item.value == "## Mission Failure" for item in self.app.markdown)
+        )
+        self.assertTrue(
+            any("escaped" in item.value for item in self.app.error)
+        )
+        self.app.button(key="return_to_design_after_failure").click().run()
+        self.assertEqual(self.app.session_state["mission_phase"], 2)
+        self.assertFalse(self.app.exception)
+
     def test_planetarium_uses_body_specific_surface_styles_and_distance_timing(self):
-        self.app.sidebar.button(key="beginner_preset").click().run()
-        self.app.button(key="initiate_launch_sequence").click().run()
+        self._advance_to_arrival("beginner_preset")
         frames = [frame.proto.srcdoc for frame in self.app.get("iframe")]
         self.assertTrue(any('dur="4.00s"' in frame for frame in frames))
         self.assertTrue(any('id="earth-ocean"' in frame for frame in frames))
         self.assertTrue(any('fill="#55bd83"' in frame for frame in frames))
 
     def test_landing_success_crash_and_restart_conditions(self):
-        self.app.sidebar.button(key="beginner_preset").click().run()
-        self.app.button(key="initiate_launch_sequence").click().run()
+        self._advance_to_arrival("beginner_preset")
         self.app.button(key="begin_landing").click().run()
+        self.assertEqual(self.app.session_state["mission_phase"], 5)
 
         self.app.session_state["landing_altitude_m"] = 1
         self.app.session_state["landing_velocity_m_s"] = 0.1
-        for _ in range(3):
-            self.app.button(key="coast_descent").click().run()
-            if self.app.session_state["flight_status"] != "landing":
-                break
+        self._submit_landing_step(0.2, False)
         self.assertEqual(self.app.session_state["flight_status"], "landed")
         self.assertEqual(self.app.session_state["landing_score"], 95)
-
-        self.app.button(key="restart_landing").click().run()
-        self.assertEqual(self.app.session_state["flight_status"], "landing")
-        self.assertEqual(self.app.session_state["landing_altitude_m"], 180)
-
-        self.app.session_state["landing_altitude_m"] = 1
-        self.app.session_state["landing_velocity_m_s"] = 8
-        self.app.button(key="coast_descent").click().run()
-        self.assertEqual(self.app.session_state["flight_status"], "crashed")
-        self.assertIn("exceeded the 5 m/s limit", self.app.session_state["flight_result"])
-        self.app.button(key="restart_landing").click().run()
-        self.app.session_state["landing_altitude_m"] = 500
-        self.app.session_state["flight_fuel_remaining_kg"] = 0
-        self.app.button(key="coast_descent").click().run()
-        self.assertEqual(self.app.session_state["flight_status"], "crashed")
-        self.assertIn("Fuel depleted", self.app.session_state["flight_result"])
+        self.assertTrue(
+            any("Mission Complete" in item.value for item in self.app.markdown)
+        )
+        self.assertTrue(
+            any(
+                item.label == "Total Mission Score"
+                for item in self.app.metric
+            )
+        )
+        self.assertEqual(self.app.session_state["slingshot_bodies_orbited"], 0)
         self.assertFalse(self.app.exception)
 
-    def test_jupiter_landing_can_be_completed_with_speed_guided_controls(self):
-        self.app.session_state["mission_phase"] = 3
+    def test_landing_failure_allows_one_retry_then_shows_diagnostics(self):
+        self._advance_to_arrival("beginner_preset")
+        self.app.button(key="begin_landing").click().run()
+        self.app.session_state["landing_altitude_m"] = 1
+        self.app.session_state["landing_velocity_m_s"] = 8
+        self._submit_landing_step(0.2, False)
+        self.assertEqual(self.app.session_state["flight_status"], "crashed")
+        self.assertIn("exceeded the 6 m/s limit", self.app.session_state["flight_result"])
+        self.assertEqual(self.app.session_state["landing_attempt_number"], 1)
+        self.app.button(key="restart_landing").click().run()
+        self.assertEqual(self.app.session_state["landing_attempt_number"], 2)
+        self.app.session_state["landing_altitude_m"] = 500
+        self.app.session_state["flight_fuel_remaining_kg"] = 0
+        self._submit_landing_step(0.2, False)
+        self.assertEqual(self.app.session_state["flight_status"], "crashed")
+        self.assertIn("Fuel depleted", self.app.session_state["flight_result"])
+        self.assertTrue(
+            any(item.value == "## Mission Failure" for item in self.app.markdown)
+        )
+        self.assertTrue(
+            any("Fuel depleted" in item.value for item in self.app.error)
+        )
+        self.app.button(key="return_to_design_after_failure").click().run()
+        self.assertEqual(self.app.session_state["mission_phase"], 2)
+        self.assertFalse(self.app.exception)
+
+    def test_landing_canvas_has_planet_surfaces_vertical_gauges_and_outcomes(self):
+        self.app.session_state["mission_phase"] = 5
         self.app.session_state["flight_status"] = "landing"
-        self.app.session_state["mission_destination"] = "Jupiter"
+        self.app.session_state["mission_destination"] = "Neptune"
+        self.app.session_state["flight_fuel_capacity_kg"] = 800
+        self.app.session_state["flight_fuel_remaining_kg"] = 800
+        self.app.session_state["landing_altitude_m"] = 180
+        self.app.session_state["landing_velocity_m_s"] = 8
+        self.app.run()
+
+        canvas_path = (
+            Path(__file__).resolve().parents[1]
+            / "landing_canvas"
+            / "index.html"
+        )
+        canvas = canvas_path.read_text(encoding="utf-8")
+        for expected in (
+            "Neptune:",
+            "drawGauge",
+            "SAFE",
+            "≤ 6",
+            "spawnExhaust",
+            "spawnExplosion",
+            "HOLD TO BURN RETRO-THRUST",
+            "SURFACE GRAVITY",
+            "SAFE_VELOCITY = 6",
+            "descentGravity",
+            "SOFT-START BELOW",
+            "Contact at 4 m",
+            "height: 32px",
+            "streamlit:setComponentValue",
+            'kind: "snapshot"',
+            "TOUCHDOWN CONFIRMED",
+            "LANDING FAILED",
+            "ResizeObserver",
+        ):
+            self.assertIn(expected, canvas)
+        self.assertNotIn("STEP_HEARTBEAT_S", canvas)
+        self.assertEqual(canvas.count("sendSnapshot();"), 1)
+        self.assertIn("landing_canvas", self.app.session_state)
+        self.assertFalse(self.app.exception)
+
+    def test_landing_snapshots_sync_once_without_physics_heartbeat_reruns(self):
+        self.app.session_state["mission_phase"] = 5
+        self.app.session_state["flight_status"] = "landing"
+        self.app.session_state["mission_destination"] = "Mars"
         self.app.session_state["flight_fuel_capacity_kg"] = 1000
         self.app.session_state["flight_fuel_remaining_kg"] = 1000
         self.app.session_state["landing_altitude_m"] = 180
         self.app.session_state["landing_velocity_m_s"] = 8
         self.app.run()
 
-        for _ in range(20):
-            if self.app.session_state["flight_status"] != "landing":
-                break
-            control = (
-                "burn_retro_thrust"
-                if self.app.session_state["landing_velocity_m_s"] > 5
-                else "coast_descent"
-            )
-            self.app.button(key=control).click().run()
+        self._submit_landing_snapshot(1, 150, 12, 900, True)
+
+        self.assertEqual(self.app.session_state["landing_altitude_m"], 150)
+        self.assertEqual(self.app.session_state["landing_velocity_m_s"], 12)
+        self.assertEqual(
+            self.app.session_state["flight_fuel_remaining_kg"],
+            900,
+        )
+        self.assertEqual(self.app.session_state["landing_last_action"], "burn")
+        action_id = self.app.session_state["landing_action_id"]
+
+        self._submit_landing_snapshot(1, 150, 12, 900, True)
+        self.assertEqual(self.app.session_state["landing_action_id"], action_id)
+        self.assertFalse(self.app.exception)
+
+    def test_landing_snapshot_touchdown_uses_server_safe_speed_threshold(self):
+        self.app.session_state["mission_phase"] = 5
+        self.app.session_state["flight_status"] = "landing"
+        self.app.session_state["mission_destination"] = "Mars"
+        self.app.session_state["flight_fuel_capacity_kg"] = 1000
+        self.app.session_state["flight_fuel_remaining_kg"] = 900
+        self.app.session_state["landing_altitude_m"] = 180
+        self.app.session_state["landing_velocity_m_s"] = 8
+        self.app.run()
+
+        self._submit_landing_snapshot(1, 4, 5, 900, False)
+        self.assertEqual(self.app.session_state["flight_status"], "landed")
+        self.assertEqual(self.app.session_state["landing_score"], 90)
+
+        self.app.button(key="restart_mission_after_victory").click().run()
+        self._advance_to_arrival("beginner_preset")
+        self.app.session_state["flight_fuel_capacity_kg"] = 1000
+        self.app.session_state["flight_fuel_remaining_kg"] = 900
+        self.app.button(key="begin_landing").click().run()
+        self.app.session_state["landing_attempt_number"] = 1
+        self._submit_landing_snapshot(2, 4, 6.1, 900, False)
+        self.assertEqual(self.app.session_state["flight_status"], "crashed")
+        self.assertIn("exceeded the 6 m/s limit", self.app.session_state["flight_result"])
+        self.assertFalse(self.app.exception)
+
+    def test_touchdown_at_exactly_six_meters_per_second_is_successful(self):
+        self.app.session_state["mission_phase"] = 5
+        self.app.session_state["flight_status"] = "landing"
+        self.app.session_state["mission_destination"] = "Mars"
+        self.app.session_state["flight_fuel_capacity_kg"] = 1000
+        self.app.session_state["flight_fuel_remaining_kg"] = 1000
+        self.app.session_state["landing_altitude_m"] = 0
+        self.app.session_state["landing_velocity_m_s"] = 6
+        self.app.run()
+
+        self._submit_landing_step(0.2, True)
 
         self.assertEqual(self.app.session_state["flight_status"], "landed")
-        self.assertLess(self.app.session_state["landing_velocity_m_s"], 5)
+        self.assertEqual(self.app.session_state["landing_velocity_m_s"], 6)
+        self.assertFalse(self.app.exception)
+
+    def test_jupiter_retro_thrust_can_brake_to_a_safe_touchdown(self):
+        self.app.session_state["mission_phase"] = 5
+        self.app.session_state["flight_status"] = "landing"
+        self.app.session_state["mission_destination"] = "Jupiter"
+        self.app.session_state["flight_fuel_capacity_kg"] = 1000
+        self.app.session_state["flight_fuel_remaining_kg"] = 1000
+        self.app.session_state["landing_altitude_m"] = 4.5
+        self.app.session_state["landing_velocity_m_s"] = 5
+        self.app.run()
+
+        self._submit_landing_step(0.2, True)
+        for _ in range(3):
+            if self.app.session_state["flight_status"] != "landing":
+                break
+            self._submit_landing_step(0.2, False)
+
+        self.assertEqual(self.app.session_state["flight_status"], "landed")
+        self.assertLessEqual(self.app.session_state["landing_velocity_m_s"], 6)
+        self.assertFalse(self.app.exception)
+
+    def test_jupiter_descent_uses_full_surface_gravity(self):
+        self.app.session_state["mission_phase"] = 5
+        self.app.session_state["flight_status"] = "landing"
+        self.app.session_state["mission_destination"] = "Jupiter"
+        self.app.session_state["flight_fuel_capacity_kg"] = 1000
+        self.app.session_state["flight_fuel_remaining_kg"] = 1000
+        self.app.session_state["landing_altitude_m"] = 180
+        self.app.session_state["landing_velocity_m_s"] = 6
+        self.app.run()
+
+        self._submit_landing_step(0.2, False)
+
+        self.assertAlmostEqual(
+            self.app.session_state["landing_velocity_m_s"],
+            6 + 24.79 * 1.05 * 0.2,
+        )
+        self.assertLess(self.app.session_state["landing_altitude_m"], 180)
+        self.assertFalse(self.app.exception)
+
+    def test_zero_velocity_uses_soft_start_gravity(self):
+        self.app.session_state["mission_phase"] = 5
+        self.app.session_state["flight_status"] = "landing"
+        self.app.session_state["mission_destination"] = "Jupiter"
+        self.app.session_state["flight_fuel_capacity_kg"] = 1000
+        self.app.session_state["flight_fuel_remaining_kg"] = 1000
+        self.app.session_state["landing_altitude_m"] = 180
+        self.app.session_state["landing_velocity_m_s"] = 0
+        self.app.run()
+
+        self._submit_landing_step(0.2, False)
+
+        self.assertAlmostEqual(
+            self.app.session_state["landing_velocity_m_s"],
+            24.79 * 1.05 * 0.15 * 0.2,
+        )
         self.assertFalse(self.app.exception)
 
     def test_sidebar_presets_load_mission_and_play_menu_cue(self):

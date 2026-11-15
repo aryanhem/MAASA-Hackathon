@@ -1,0 +1,598 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    :root {
+      color-scheme: light dark;
+      font: 14px/1.45 system-ui, sans-serif;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      color: #eaf3ff;
+      background: transparent;
+    }
+    .frame {
+      position: relative;
+      overflow: hidden;
+      border: 1px solid rgba(148, 163, 184, .36);
+      border-radius: 16px;
+      background: linear-gradient(145deg, #081321, #111b2c 55%, #10172a);
+      box-shadow: 0 16px 38px rgba(8, 15, 30, .2);
+    }
+    canvas {
+      display: block;
+      width: 100%;
+      height: auto;
+      touch-action: none;
+      cursor: crosshair;
+    }
+    .hint {
+      padding: 9px 14px 12px;
+      color: #c4d2e3;
+      font-size: 12px;
+    }
+    .hint strong { color: #fff; }
+  </style>
+</head>
+<body>
+  <div class="frame">
+    <canvas id="flight" width="900" height="480"
+      aria-label="Drag backward from the rocket to aim a gravity-assisted launch"></canvas>
+    <div class="hint"><strong>Drag backward from the rocket, then release.</strong>
+      Curve around the flyby bodies and reach the destination landing zone.</div>
+  </div>
+  <script>
+    (() => {
+      "use strict";
+      const canvas = document.getElementById("flight");
+      const ctx = canvas.getContext("2d");
+      const W = 900, H = 480, dt = 0.12, maxTime = 60;
+      const launch = {x: 139, y: 320};
+      const maxSpeed = 24, dragScale = 0.16;
+      let args = {attempt_id: -1, bodies: []};
+      let mode = "loading";
+      let dragging = false;
+      let dragPoint = null;
+      let predicted = [];
+      let launchedPath = [];
+      let animationIndex = 0;
+      let velocity = {x: 0, y: 0};
+      let outcome = null;
+      let stars = [];
+      for (let i = 0; i < 95; i++) {
+        stars.push({
+          x: (i * 197 + 31) % W,
+          y: (i * 113 + 19) % H,
+          r: .5 + (i % 4) * .28,
+          a: .2 + (i % 5) * .12
+        });
+      }
+
+      function bodies() {
+        return Array.isArray(args.bodies) ? args.bodies : [];
+      }
+
+      function simulate(vx0, vy0) {
+        const routeBodies = bodies();
+        const earth = routeBodies[0];
+        if (!earth) return {status:"failure", reason:"Route data is not ready.", points:[]};
+        let x = launch.x, y = launch.y, vx = vx0, vy = vy0;
+        const points = [{x, y}];
+        const encounteredBodies = new Set();
+        const steps = Math.floor(maxTime / dt);
+        for (let step = 0; step < steps; step++) {
+          let ax = 0, ay = 0;
+          for (const body of routeBodies.slice(1)) {
+            const dx = body.x - x, dy = body.y - y;
+            const distanceSquared = dx * dx + dy * dy;
+            if (body.mu && distanceSquared) {
+              const softened = distanceSquared + body.radius * body.radius;
+              const acceleration = body.mu / softened;
+              const distance = Math.sqrt(distanceSquared);
+              ax += acceleration * dx / distance;
+              ay += acceleration * dy / distance;
+            }
+          }
+          const magnitude = Math.hypot(ax, ay);
+          if (magnitude > 3.2) {
+            ax *= 3.2 / magnitude;
+            ay *= 3.2 / magnitude;
+          }
+          vx += ax * dt;
+          vy += ay * dt;
+          x += vx * dt;
+          y += vy * dt;
+          points.push({x, y});
+          for (const body of routeBodies.slice(1)) {
+            if (body.kind === "gravity"
+                && Math.hypot(body.x - x, body.y - y) <= body.radius * 3.5) {
+              encounteredBodies.add(body.name);
+            }
+          }
+          for (const body of routeBodies.slice(1)) {
+            if (Math.hypot(body.x - x, body.y - y) <= body.radius) {
+              return {
+                status: body.kind === "target" ? "success" : "failure",
+                reason: body.kind === "target"
+                  ? `Trajectory reached ${args.destination} after ${encounteredBodies.size} gravity assists.`
+                  : `Trajectory collided with ${body.name}.`,
+                points, impact_speed: Math.hypot(vx, vy),
+                bodies_orbited: encounteredBodies.size
+              };
+            }
+          }
+          if (Math.hypot(earth.x - x, earth.y - y) <= earth.radius) {
+            return {
+              status:"failure", reason:"Trajectory re-entered the launch planet.",
+              points, impact_speed:Math.hypot(vx, vy),
+              bodies_orbited:encounteredBodies.size
+            };
+          }
+          if (x < 0 || x > W || y < 0 || y > H) {
+            return {
+              status:"failure", reason:"Trajectory escaped the navigable flight corridor.",
+              points, impact_speed:Math.hypot(vx, vy),
+              bodies_orbited:encounteredBodies.size
+            };
+          }
+        }
+        return {
+          status:"failure",
+          reason:"Trajectory missed the target within the flight window.",
+          points, impact_speed:Math.hypot(vx, vy),
+          bodies_orbited:encounteredBodies.size
+        };
+      }
+
+      function drawPlanet(body, accent) {
+        if (body.surface === "debris" || body.surface === "asteroids") {
+          ctx.save();
+          ctx.fillStyle = body.color;
+          const count = body.surface === "asteroids" ? 9 : 6;
+          for (let i = 0; i < count; i++) {
+            const angle = i * 2.4;
+            const distance = body.radius * (.2 + (i % 3) * .2);
+            const size = body.surface === "asteroids" ? 2 + i % 4 : 2 + i % 3;
+            ctx.beginPath();
+            ctx.arc(
+              body.x + Math.cos(angle) * distance,
+              body.y + Math.sin(angle) * distance,
+              size,
+              0,
+              Math.PI * 2
+            );
+            ctx.fill();
+          }
+          ctx.strokeStyle = body.color + "88";
+          ctx.setLineDash([3, 5]);
+          ctx.beginPath();
+          ctx.ellipse(body.x, body.y, body.radius * 1.8, body.radius * .75, -.15, 0, Math.PI * 2);
+          ctx.stroke();
+          ctx.restore();
+          ctx.fillStyle = "#e8f0fc";
+          ctx.font = "600 12px system-ui, sans-serif";
+          ctx.textAlign = "center";
+          ctx.fillText(body.name, body.x, body.y + body.radius + 20);
+          return;
+        }
+        const glow = ctx.createRadialGradient(
+          body.x - body.radius * .3, body.y - body.radius * .4, 2,
+          body.x, body.y, body.radius * 1.7
+        );
+        glow.addColorStop(0, body.color + "44");
+        glow.addColorStop(1, body.color + "00");
+        ctx.fillStyle = glow;
+        ctx.beginPath();
+        ctx.arc(body.x, body.y, body.radius * 1.7, 0, Math.PI * 2);
+        ctx.fill();
+        if (body.rings) {
+          ctx.save();
+          ctx.translate(body.x, body.y);
+          ctx.rotate(-.16);
+          ctx.strokeStyle = body.color + "c9";
+          ctx.lineWidth = Math.max(4, body.radius * .22);
+          ctx.beginPath();
+          ctx.ellipse(0, 0, body.radius * 1.65, body.radius * .48, 0, 0, Math.PI * 2);
+          ctx.stroke();
+          ctx.restore();
+        }
+        const surface = ctx.createRadialGradient(
+          body.x - body.radius * .35, body.y - body.radius * .4, 2,
+          body.x, body.y, body.radius
+        );
+        surface.addColorStop(0, "#f5fbff");
+        surface.addColorStop(.12, body.color);
+        surface.addColorStop(1, "#172338");
+        ctx.fillStyle = surface;
+        ctx.beginPath();
+        ctx.arc(body.x, body.y, body.radius, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.save();
+        ctx.beginPath();
+        ctx.arc(body.x, body.y, body.radius, 0, Math.PI * 2);
+        ctx.clip();
+        if (body.surface === "jupiter" || body.surface === "saturn") {
+          ctx.fillStyle = body.surface === "jupiter" ? "#a96955" : "#b2925d";
+          for (let band = -2; band <= 2; band++) {
+            ctx.fillRect(
+              body.x - body.radius,
+              body.y + band * body.radius * .34,
+              body.radius * 2,
+              body.radius * .11
+            );
+          }
+          if (body.surface === "jupiter") {
+            ctx.fillStyle = "#a85d4d";
+            ctx.beginPath();
+            ctx.ellipse(
+              body.x + body.radius * .32,
+              body.y + body.radius * .2,
+              body.radius * .22,
+              body.radius * .1,
+              -.12,
+              0,
+              Math.PI * 2
+            );
+            ctx.fill();
+          }
+        } else if (body.surface === "earth") {
+          ctx.fillStyle = "#67b98a";
+          ctx.beginPath();
+          ctx.moveTo(body.x - body.radius * .75, body.y - body.radius * .1);
+          ctx.lineTo(body.x - body.radius * .35, body.y - body.radius * .58);
+          ctx.lineTo(body.x + body.radius * .03, body.y - body.radius * .4);
+          ctx.lineTo(body.x - body.radius * .08, body.y + body.radius * .02);
+          ctx.lineTo(body.x - body.radius * .45, body.y + body.radius * .35);
+          ctx.closePath();
+          ctx.fill();
+          ctx.beginPath();
+          ctx.ellipse(
+            body.x + body.radius * .47,
+            body.y + body.radius * .24,
+            body.radius * .19,
+            body.radius * .34,
+            -.4,
+            0,
+            Math.PI * 2
+          );
+          ctx.fill();
+        } else if (body.surface === "moon" || body.surface === "mercury") {
+          ctx.fillStyle = "rgba(42, 52, 67, .28)";
+          for (let crater = 0; crater < 4; crater++) {
+            const cx = body.x + Math.cos(crater * 2.4) * body.radius * .48;
+            const cy = body.y + Math.sin(crater * 2.4) * body.radius * .42;
+            ctx.beginPath();
+            ctx.arc(cx, cy, body.radius * (.09 + (crater % 2) * .04), 0, Math.PI * 2);
+            ctx.fill();
+          }
+        }
+        ctx.restore();
+        ctx.strokeStyle = body.kind === "target" ? accent : body.color + "bb";
+        ctx.lineWidth = body.kind === "target" ? 2 : 1;
+        ctx.stroke();
+        if (body.kind === "target") {
+          ctx.setLineDash([5, 6]);
+          ctx.strokeStyle = accent + "bd";
+          ctx.lineWidth = 2;
+          ctx.beginPath();
+          ctx.arc(body.x, body.y, body.radius + 12, 0, Math.PI * 2);
+          ctx.stroke();
+          ctx.setLineDash([]);
+        }
+        ctx.fillStyle = "#e8f0fc";
+        ctx.font = "600 12px system-ui, sans-serif";
+        ctx.textAlign = "center";
+        ctx.fillText(body.name, body.x, body.y + body.radius + 20);
+      }
+
+      function drawRocket(x, y, angle, accent, scale = 1) {
+        ctx.save();
+        ctx.translate(x, y);
+        ctx.rotate(angle);
+        ctx.scale(scale, scale);
+        ctx.shadowColor = accent;
+        ctx.shadowBlur = 12;
+        ctx.fillStyle = "#f5f8ff";
+        ctx.beginPath();
+        ctx.moveTo(20, 0);
+        ctx.quadraticCurveTo(3, -13, -10, -8);
+        ctx.lineTo(-8, 0);
+        ctx.lineTo(-10, 8);
+        ctx.quadraticCurveTo(3, 13, 20, 0);
+        ctx.fill();
+        ctx.shadowBlur = 0;
+        ctx.fillStyle = accent;
+        ctx.beginPath();
+        ctx.arc(3, 0, 3.5, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = "#ffb454";
+        ctx.beginPath();
+        ctx.moveTo(-8, -5);
+        ctx.lineTo(-21, 0);
+        ctx.lineTo(-8, 5);
+        ctx.fill();
+        ctx.restore();
+      }
+
+      function drawPath(points, color, dotted, alpha = 1) {
+        if (!points || points.length < 2) return;
+        ctx.save();
+        ctx.globalAlpha = alpha;
+        ctx.strokeStyle = color;
+        ctx.lineWidth = dotted ? 2 : 3;
+        ctx.setLineDash(dotted ? [3, 8] : []);
+        ctx.shadowColor = color;
+        ctx.shadowBlur = dotted ? 7 : 12;
+        ctx.beginPath();
+        ctx.moveTo(points[0].x, points[0].y);
+        for (let i = 1; i < points.length; i++) {
+          ctx.lineTo(points[i].x, points[i].y);
+        }
+        ctx.stroke();
+        ctx.restore();
+      }
+
+      function overlay(title, subtitle, retry, success) {
+        ctx.fillStyle = "rgba(4, 10, 20, .84)";
+        ctx.fillRect(85, 140, 730, 190);
+        ctx.strokeStyle = success ? "#55f2c2" : "#ff718b";
+        ctx.lineWidth = 2;
+        ctx.strokeRect(85, 140, 730, 190);
+        ctx.textAlign = "center";
+        ctx.fillStyle = success ? "#a7f3d0" : "#fecdd3";
+        ctx.font = "700 24px system-ui, sans-serif";
+        ctx.fillText(title, 450, 190);
+        ctx.fillStyle = "#e5edf8";
+        ctx.font = "14px system-ui, sans-serif";
+        ctx.fillText(subtitle, 450, 220, 660);
+        if (retry) {
+          const button = {x:350, y:252, w:200, h:48};
+          ctx.fillStyle = "#be123c";
+          ctx.beginPath();
+          ctx.roundRect(button.x, button.y, button.w, button.h, 10);
+          ctx.fill();
+          ctx.fillStyle = "#fff";
+          ctx.font = "700 14px system-ui, sans-serif";
+          ctx.fillText(
+            `RETRY LAUNCH · ${args.attempts_remaining || 1} LEFT`,
+            450,
+            282
+          );
+          return button;
+        }
+        return null;
+      }
+
+      let retryButton = null;
+      function render() {
+        const accent = args.accent || "#55f2c2";
+        const sky = ctx.createLinearGradient(0, 0, W, H);
+        sky.addColorStop(0, "#07111e");
+        sky.addColorStop(.58, "#111b2c");
+        sky.addColorStop(1, "#15152a");
+        ctx.fillStyle = sky;
+        ctx.fillRect(0, 0, W, H);
+        for (const star of stars) {
+          ctx.globalAlpha = star.a;
+          ctx.fillStyle = "#dceaff";
+          ctx.beginPath();
+          ctx.arc(star.x, star.y, star.r, 0, Math.PI * 2);
+          ctx.fill();
+        }
+        ctx.globalAlpha = 1;
+        ctx.strokeStyle = "rgba(146, 174, 211, .13)";
+        ctx.setLineDash([2, 8]);
+        for (let x = 70; x < W; x += 80) {
+          ctx.beginPath();
+          ctx.moveTo(x, 32);
+          ctx.lineTo(x, H - 24);
+          ctx.stroke();
+        }
+        ctx.setLineDash([]);
+        const routeBodies = bodies();
+        for (const body of routeBodies) drawPlanet(body, accent);
+        ctx.fillStyle = "#d7e8f8";
+        ctx.font = "700 11px system-ui, sans-serif";
+        ctx.textAlign = "left";
+        ctx.fillText("EARTH DEPARTURE", 30, 42);
+        const livePath = mode === "animating"
+          ? launchedPath.slice(0, animationIndex + 1)
+          : launchedPath;
+        if (dragging && predicted.length) drawPath(predicted, accent, true, .92);
+        else if (mode === "aiming" && predicted.length) {
+          drawPath(predicted, accent, true, .72);
+        }
+        if (livePath.length > 1) drawPath(livePath, accent, false, .9);
+        const rocketPoint = mode === "animating" && livePath.length
+          ? livePath[livePath.length - 1]
+          : launch;
+        const rocketAngle = mode === "dragging" && dragPoint
+          ? Math.atan2(launch.y - dragPoint.y, launch.x - dragPoint.x)
+          : Math.atan2(velocity.y, velocity.x);
+        drawRocket(rocketPoint.x, rocketPoint.y, rocketAngle, accent);
+        if (dragging && dragPoint) {
+          ctx.strokeStyle = "rgba(255,255,255,.55)";
+          ctx.setLineDash([5, 6]);
+          ctx.beginPath();
+          ctx.moveTo(launch.x, launch.y);
+          ctx.lineTo(dragPoint.x, dragPoint.y);
+          ctx.stroke();
+          ctx.setLineDash([]);
+        }
+        retryButton = null;
+        if (args.outcome) {
+          const success = args.outcome.status === "success";
+          retryButton = overlay(
+            success ? "TRAJECTORY LOCKED" : "MISSION FAILED: TRAJECTORY MISSED",
+            args.outcome.reason || "Adjust your aim and launch again.",
+            !success && Boolean(args.retry_allowed),
+            success
+          );
+        } else if (mode === "animating") {
+          ctx.fillStyle = "#e8f0fc";
+          ctx.textAlign = "center";
+          ctx.font = "600 13px system-ui, sans-serif";
+          ctx.fillText("GRAVITY-ASSISTED LAUNCH IN PROGRESS", W / 2, 42);
+        }
+      }
+
+      function componentReady() {
+        window.parent.postMessage({
+          isStreamlitMessage:true,
+          type:"streamlit:componentReady",
+          apiVersion:1
+        }, "*");
+        requestAnimationFrame(setFrameHeight);
+      }
+      function setFrameHeight() {
+        const frame = document.querySelector(".frame");
+        if (!frame) return;
+        const height = Math.ceil(frame.getBoundingClientRect().height);
+        if (height > 0) {
+          window.parent.postMessage({
+            isStreamlitMessage:true,
+            type:"streamlit:setFrameHeight",
+            height
+          }, "*");
+        }
+      }
+      function setValue(value) {
+        window.parent.postMessage({
+          isStreamlitMessage:true,
+          type:"streamlit:setComponentValue",
+          value,
+          dataType:"json"
+        }, "*");
+      }
+      window.addEventListener("message", event => {
+        if (!event.data || event.data.type !== "streamlit:render") return;
+        const nextArgs = event.data.args || {};
+        if (nextArgs.attempt_id !== args.attempt_id) {
+          mode = "aiming";
+          dragging = false;
+          dragPoint = null;
+          predicted = [];
+          launchedPath = [];
+          outcome = null;
+          velocity = {x:0, y:0};
+          args = nextArgs;
+        } else {
+          args = nextArgs;
+        }
+        if (!Array.isArray(args.bodies) || args.bodies.length < 2) {
+          mode = "loading";
+          render();
+          return;
+        }
+        if (args.outcome) {
+          outcome = args.outcome;
+          mode = outcome.status;
+        } else {
+          outcome = null;
+        }
+        render();
+      });
+
+      function pointerPosition(event) {
+        const rect = canvas.getBoundingClientRect();
+        return {
+          x:(event.clientX - rect.left) * W / rect.width,
+          y:(event.clientY - rect.top) * H / rect.height
+        };
+      }
+      canvas.addEventListener("pointerdown", event => {
+        const point = pointerPosition(event);
+        if (retryButton
+            && point.x >= retryButton.x && point.x <= retryButton.x + retryButton.w
+            && point.y >= retryButton.y && point.y <= retryButton.y + retryButton.h) {
+          setValue({kind:"retry", attempt_id:args.attempt_id});
+          mode = "aiming";
+          retryButton = null;
+          render();
+          return;
+        }
+        if (mode !== "aiming" || Math.hypot(point.x - launch.x, point.y - launch.y) > 46) return;
+        dragging = true;
+        mode = "dragging";
+        dragPoint = point;
+        canvas.setPointerCapture(event.pointerId);
+        event.preventDefault();
+        render();
+      });
+      canvas.addEventListener("pointermove", event => {
+        if (!dragging) return;
+        dragPoint = pointerPosition(event);
+        let vx = (launch.x - dragPoint.x) * dragScale;
+        let vy = (launch.y - dragPoint.y) * dragScale;
+        const speed = Math.hypot(vx, vy);
+        if (speed > maxSpeed) {
+          vx *= maxSpeed / speed;
+          vy *= maxSpeed / speed;
+        }
+        predicted = simulate(vx, vy).points;
+        render();
+      });
+      canvas.addEventListener("pointerup", event => {
+        if (!dragging) return;
+        dragPoint = pointerPosition(event);
+        dragging = false;
+        let vx = (launch.x - dragPoint.x) * dragScale;
+        let vy = (launch.y - dragPoint.y) * dragScale;
+        const speed = Math.hypot(vx, vy);
+        if (speed > maxSpeed) {
+          vx *= maxSpeed / speed;
+          vy *= maxSpeed / speed;
+        }
+        if (speed < 2) {
+          mode = "aiming";
+          predicted = [];
+          render();
+          return;
+        }
+        velocity = {x:vx, y:vy};
+        const result = simulate(vx, vy);
+        launchedPath = result.points;
+        mode = "animating";
+        animationIndex = 0;
+        const frames = Math.min(115, launchedPath.length);
+        const increment = Math.max(1, Math.ceil(launchedPath.length / frames));
+        function animate() {
+          animationIndex = Math.min(animationIndex + increment, launchedPath.length - 1);
+          render();
+          if (animationIndex < launchedPath.length - 1) {
+            requestAnimationFrame(animate);
+          } else {
+            mode = "awaiting";
+            setValue({
+              kind:"launch",
+              attempt_id:args.attempt_id,
+              velocity_x:vx,
+              velocity_y:vy
+            });
+            render();
+          }
+        }
+        requestAnimationFrame(animate);
+      });
+      canvas.addEventListener("pointercancel", () => {
+        dragging = false;
+        mode = "aiming";
+        dragPoint = null;
+        predicted = [];
+        render();
+      });
+      componentReady();
+      render();
+      if ("ResizeObserver" in window) {
+        new ResizeObserver(() => requestAnimationFrame(setFrameHeight))
+          .observe(document.querySelector(".frame"));
+      } else {
+        window.addEventListener("resize", () => requestAnimationFrame(setFrameHeight));
+      }
+    })();
+  </script>
+</body>
+</html>

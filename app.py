@@ -1,9 +1,10 @@
-"""Three-phase Streamlit space mission design and landing game."""
+"""Streamlit space mission design, flight, and landing game."""
 
 import base64
 from html import escape
 import io
 import math
+from pathlib import Path
 import struct
 from textwrap import dedent
 import time
@@ -22,9 +23,20 @@ from mission_design import (
     HULL_MINIMUM_BY_DESTINATION,
     LAUNCHPAD_MODIFIERS,
     LAUNCH_SITES,
+    calculate_mission_score,
     evaluate_mission,
 )
+from slingshot import simulate_trajectory, trajectory_bodies
 
+
+gravity_slingshot = components.declare_component(
+    "gravity_slingshot",
+    path=str(Path(__file__).parent / "gravity_slingshot"),
+)
+landing_canvas = components.declare_component(
+    "landing_canvas",
+    path=str(Path(__file__).parent / "landing_canvas"),
+)
 
 SITE_COORDINATES = {
     "Guiana Space Centre": (5.236, -52.768),
@@ -204,22 +216,40 @@ PLANET_GRAVITY_M_S2 = {
     "Uranus": 8.69,
     "Neptune": 11.15,
 }
-LANDING_GRAVITY_MIN_M_S2 = 3.0
-LANDING_GRAVITY_MAX_M_S2 = 6.0
-RETRO_THRUST_ACCELERATION_M_S2 = 18.0
+LANDING_GRAVITY_GAME_SCALE = 1.05
+LANDING_CONTACT_ALTITUDE_M = 4.0
+LANDING_MAX_STEP_DURATION_S = 0.3
 LANDING_ACTION_DURATION_S = 4.0
 LANDING_START_ALTITUDE_M = 180.0
+LANDING_START_VELOCITY_M_S = 9.0
+LANDING_SAFE_TOUCHDOWN_SPEED_M_S = 6.0
+LANDING_SOFT_START_SPEED_M_S = LANDING_SAFE_TOUCHDOWN_SPEED_M_S
+LANDING_MIN_GRAVITY_FRACTION = 0.15
+LANDING_MAX_ATTEMPTS = 2
+SLINGSHOT_MAX_ATTEMPTS = 2
+SLINGSHOT_FUEL_COST_PER_BODY = 0.04
 
 
 def _landing_gravity(destination: str) -> float:
-    """Scale real gravity into a forgiving range for the arcade landing game."""
-    return min(
-        LANDING_GRAVITY_MAX_M_S2,
-        max(
-            LANDING_GRAVITY_MIN_M_S2,
-            PLANET_GRAVITY_M_S2[destination] * 0.5,
-        ),
+    """Return the destination's real surface gravity for the descent simulation."""
+    return PLANET_GRAVITY_M_S2[destination] * LANDING_GRAVITY_GAME_SCALE
+
+
+def _landing_retro_acceleration(gravity_m_s2: float) -> float:
+    """Make held retro-thrust stronger than gravity on every destination."""
+    return max(2.5, gravity_m_s2 * 3.0)
+
+
+def _landing_descent_acceleration(velocity_m_s: float, gravity_m_s2: float) -> float:
+    """Ease gravity in below the safe-speed threshold to avoid control chatter."""
+    speed_fraction = min(
+        1.0,
+        max(0.0, velocity_m_s / LANDING_SOFT_START_SPEED_M_S),
     )
+    gravity_fraction = LANDING_MIN_GRAVITY_FRACTION + (
+        1.0 - LANDING_MIN_GRAVITY_FRACTION
+    ) * speed_fraction
+    return gravity_m_s2 * gravity_fraction
 
 
 def _build_ui_sound(notes: tuple[tuple[float, float], ...]) -> str:
@@ -1396,153 +1426,424 @@ def _initiate_launch_sequence() -> None:
     if not complete_build or not result.success:
         return
 
-    fuel_capacity = float(FUEL_TANK_CHOICES[fuel_tank]["mass_kg"])
     st.session_state.mission_phase = 3
+    st.session_state.flight_status = "slingshot"
+    st.session_state.slingshot_attempt_number = 1
+    st.session_state.slingshot_bodies_orbited = 0
+    st.session_state.slingshot_attempt_id = (
+        st.session_state.get("slingshot_attempt_id", 0) + 1
+    )
+    st.session_state.slingshot_processed_attempt_id = None
+    st.session_state.slingshot_outcome = None
+    st.session_state.pop("menu_sound_pending", None)
+
+
+def _process_slingshot_event(event: Any) -> bool:
+    """Apply one client slingshot event to authoritative mission state."""
+    if not isinstance(event, dict):
+        return False
+    if event.get("attempt_id") != st.session_state.slingshot_attempt_id:
+        return False
+    if event.get("kind") == "retry":
+        if st.session_state.slingshot_attempt_number >= SLINGSHOT_MAX_ATTEMPTS:
+            return False
+        st.session_state.slingshot_attempt_number += 1
+        st.session_state.slingshot_attempt_id += 1
+        st.session_state.slingshot_processed_attempt_id = None
+        st.session_state.slingshot_outcome = None
+        _queue_menu_action_sound()
+        return True
+    if (
+        event.get("kind") != "launch"
+        or st.session_state.slingshot_processed_attempt_id
+        == st.session_state.slingshot_attempt_id
+    ):
+        return False
+
+    try:
+        trajectory = simulate_trajectory(
+            st.session_state.mission_destination,
+            float(event["velocity_x"]),
+            float(event["velocity_y"]),
+        )
+    except (KeyError, TypeError, ValueError) as error:
+        st.session_state.slingshot_outcome = {
+            "status": "failure",
+            "reason": f"Invalid launch input: {error}",
+        }
+    else:
+        st.session_state.slingshot_outcome = {
+            "status": trajectory["status"],
+            "reason": trajectory["reason"],
+            "impact_speed": trajectory["impact_speed"],
+            "bodies_orbited": trajectory["bodies_orbited"],
+        }
+        st.session_state.slingshot_bodies_orbited = trajectory["bodies_orbited"]
+    st.session_state.slingshot_processed_attempt_id = (
+        st.session_state.slingshot_attempt_id
+    )
+    return True
+
+
+def _continue_to_flight() -> None:
+    outcome = st.session_state.get("slingshot_outcome")
+    if not outcome or outcome.get("status") != "success":
+        return
+    fuel_capacity = float(
+        FUEL_TANK_CHOICES[st.session_state.mission_fuel_tank]["mass_kg"]
+    )
+    bodies_orbited = st.session_state.get("slingshot_bodies_orbited", 0)
+    remaining_fuel = fuel_capacity * max(
+        0.0,
+        1.0 - SLINGSHOT_FUEL_COST_PER_BODY * bodies_orbited,
+    )
+    st.session_state.mission_phase = 4
     st.session_state.flight_status = "in_flight"
     st.session_state.flight_fuel_capacity_kg = fuel_capacity
-    st.session_state.flight_fuel_remaining_kg = fuel_capacity
+    st.session_state.flight_fuel_remaining_kg = remaining_fuel
+    st.session_state.flight_fuel_start_kg = remaining_fuel
     st.session_state.landing_altitude_m = LANDING_START_ALTITUDE_M
-    st.session_state.landing_velocity_m_s = 8.0
+    st.session_state.landing_velocity_m_s = LANDING_START_VELOCITY_M_S
     st.session_state.landing_score = None
+    st.session_state.flight_result = None
+    st.session_state.landing_attempt_number = 0
+    st.session_state.landing_last_event_id = 0
+    st.session_state.landing_action_id += 1
+    st.session_state.landing_last_action = None
     st.session_state.pop("menu_sound_pending", None)
 
 
 def _begin_landing() -> None:
     if st.session_state.flight_status == "arrival":
+        st.session_state.mission_phase = 5
         st.session_state.flight_status = "landing"
+        st.session_state.landing_attempt_number = 1
+        st.session_state.landing_start_fuel_kg = (
+            st.session_state.flight_fuel_remaining_kg
+        )
+        st.session_state.landing_last_event_id = 0
+        st.session_state.landing_action_id += 1
+        st.session_state.landing_last_action = None
         _queue_phase_sound()
 
 
 def _return_to_assembly() -> None:
     st.session_state.mission_phase = 2
     st.session_state.flight_status = "assembly"
+    st.session_state.slingshot_outcome = None
+    st.session_state.flight_result = None
+    st.session_state.landing_score = None
     _queue_menu_action_sound()
 
 
-def _apply_landing_action(action: str, duration_s: float = 3.0) -> None:
+def _return_to_rocket_design() -> None:
+    _return_to_assembly()
+    st.session_state.mission_components = {}
+    st.session_state.mission_engine = None
+    st.session_state.mission_fuel_tank = None
+    for category in COMPONENT_CHOICES:
+        st.session_state[f"component_picker_{category}"] = None
+    st.session_state.engine_picker = None
+    st.session_state.fuel_tank_picker = None
+
+
+def _show_failure_scorecard(
+    phase: str,
+    reason: str,
+    attempts: int,
+    telemetry: tuple[tuple[str, str], ...],
+) -> None:
+    with st.container(border=True):
+        st.markdown("## Mission Failure")
+        st.caption(f"Failure phase: {phase} · Attempts used: {attempts}/{2}")
+        st.error(reason)
+        if telemetry:
+            columns = st.columns(len(telemetry))
+            for column, (label, value) in zip(columns, telemetry):
+                column.metric(label, value)
+        st.button(
+            "Return to Rocket Design",
+            key="return_to_design_after_failure",
+            type="primary",
+            on_click=_return_to_rocket_design,
+        )
+
+
+def _show_victory_scorecard() -> None:
+    with st.container(border=True):
+        st.markdown("# 🏆 Mission Complete")
+        try:
+            score = calculate_mission_score(
+                st.session_state.mission_components,
+                st.session_state.selected_launch_site,
+                st.session_state.get("slingshot_bodies_orbited", 0),
+                st.session_state.flight_fuel_remaining_kg,
+                st.session_state.flight_fuel_capacity_kg,
+            )
+        except (KeyError, TypeError, ValueError) as error:
+            st.error(f"Mission succeeded, but its score could not be calculated: {error}")
+        else:
+            st.metric("Total Mission Score", f"{score.total_score:,.1f}")
+            breakdown = st.columns(4)
+            breakdown[0].metric(
+                "Research value",
+                f"{score.research_points:g} pts",
+            )
+            breakdown[1].metric(
+                "Launch-site risk",
+                f"{score.launch_difficulty_multiplier:.1f}×",
+            )
+            breakdown[2].metric(
+                "Slingshot body bonus",
+                f"{score.slingshot_body_bonus:.1f}×",
+                f"{score.bodies_orbited} gravity assists",
+            )
+            breakdown[3].metric(
+                "Fuel efficiency bonus",
+                f"+{score.fuel_efficiency_bonus:.1f} pts",
+                f"{score.fuel_remaining_percentage:.1f}% remaining",
+            )
+            st.caption(
+                "Score = research × launch-site risk × gravity-assist bonus "
+                "+ fuel remaining percentage."
+            )
+
+        st.markdown("### Touchdown telemetry")
+        telemetry = st.columns(3)
+        telemetry[0].metric("Final altitude", "0 m")
+        telemetry[1].metric(
+            "Touchdown speed",
+            f"{st.session_state.landing_velocity_m_s:.1f} m/s",
+        )
+        telemetry[2].metric(
+            "Remaining fuel",
+            f"{st.session_state.flight_fuel_remaining_kg:,.0f} kg",
+        )
+        st.button(
+            "Restart Mission / Design New Rocket",
+            key="restart_mission_after_victory",
+            type="primary",
+            on_click=_return_to_rocket_design,
+            use_container_width=True,
+        )
+
+
+def _apply_landing_action(action: str, duration_s: float) -> None:
     if st.session_state.flight_status != "landing":
         return
+    if action not in ("burn", "coast"):
+        raise ValueError(f"Unknown landing action: {action!r}.")
 
     altitude = st.session_state.landing_altitude_m
     velocity = st.session_state.landing_velocity_m_s
     fuel_remaining = st.session_state.flight_fuel_remaining_kg
     fuel_capacity = st.session_state.flight_fuel_capacity_kg
     gravity = _landing_gravity(st.session_state.mission_destination)
-    if fuel_remaining <= 0 and altitude > 50:
+    retro_acceleration = _landing_retro_acceleration(gravity)
+    if fuel_remaining <= 0 and altitude > LANDING_CONTACT_ALTITUDE_M:
         st.session_state.flight_status = "crashed"
-        st.session_state.flight_result = "Fuel depleted above the safe landing zone."
+        st.session_state.flight_result = "Fuel depleted before touchdown."
         return
-    if action == "burn":
-        burn_amount = min(
-            fuel_remaining,
-            fuel_capacity * 0.03 * duration_s / LANDING_ACTION_DURATION_S,
-        )
-        fuel_remaining = max(0.0, fuel_remaining - burn_amount)
-        acceleration = gravity - RETRO_THRUST_ACCELERATION_M_S2
-    elif action == "coast":
-        acceleration = gravity
-    else:
-        raise ValueError(f"Unknown landing action: {action!r}.")
 
-    stopping_time = (
-        velocity / -acceleration
-        if acceleration < 0 and velocity + acceleration * duration_s < 0
-        else duration_s
-    )
-    traveled = max(
-        0.0,
-        velocity * stopping_time + 0.5 * acceleration * stopping_time**2,
-    )
-    touched_down = traveled >= altitude
-    if touched_down:
-        impact_velocity = math.sqrt(
-            max(0.0, velocity**2 + 2 * acceleration * altitude)
+    def advance_segment(segment_duration: float, acceleration: float) -> bool:
+        nonlocal altitude, velocity
+        if segment_duration <= 0:
+            return False
+        if altitude <= LANDING_CONTACT_ALTITUDE_M:
+            altitude = 0.0
+            return True
+        stop_time = (
+            velocity / -acceleration
+            if acceleration < 0 and velocity + acceleration * segment_duration < 0
+            else segment_duration
         )
-        altitude = 0.0
-        velocity = impact_velocity
-    else:
+        traveled = max(
+            0.0,
+            velocity * stop_time + 0.5 * acceleration * stop_time**2,
+        )
+        distance_to_contact = altitude - LANDING_CONTACT_ALTITUDE_M
+        if traveled >= distance_to_contact:
+            impact_velocity = math.sqrt(
+                max(0.0, velocity**2 + 2 * acceleration * distance_to_contact)
+            )
+            altitude = 0.0
+            velocity = impact_velocity
+            return True
         altitude -= traveled
-        velocity = max(0.0, velocity + acceleration * duration_s)
+        velocity = max(0.0, velocity + acceleration * segment_duration)
+        return False
+
+    touched_down = False
+    if action == "burn" and fuel_remaining > 0:
+        fuel_rate = fuel_capacity * 0.03 / LANDING_ACTION_DURATION_S
+        burn_duration = min(duration_s, fuel_remaining / fuel_rate)
+        fuel_remaining = max(0.0, fuel_remaining - fuel_rate * burn_duration)
+        touched_down = advance_segment(
+            burn_duration,
+            _landing_descent_acceleration(velocity, gravity)
+            - retro_acceleration,
+        )
+        if not touched_down and burn_duration < duration_s:
+            altitude = max(0.0, altitude)
+            st.session_state.flight_status = "crashed"
+            st.session_state.flight_result = "Fuel depleted before touchdown."
+    else:
+        touched_down = advance_segment(
+            duration_s,
+            _landing_descent_acceleration(velocity, gravity),
+        )
 
     st.session_state.landing_altitude_m = altitude
     st.session_state.landing_velocity_m_s = velocity
     st.session_state.flight_fuel_remaining_kg = fuel_remaining
-    if fuel_remaining <= 0 and altitude > 50:
-        st.session_state.flight_status = "crashed"
-        st.session_state.flight_result = "Fuel depleted above the safe landing zone."
+    if st.session_state.flight_status != "landing":
         return
-    if altitude <= 0:
-        if velocity < 5.0:
+    if fuel_remaining <= 0 and altitude > LANDING_CONTACT_ALTITUDE_M:
+        st.session_state.flight_status = "crashed"
+        st.session_state.flight_result = "Fuel depleted before touchdown."
+        return
+    if touched_down:
+        if velocity <= LANDING_SAFE_TOUCHDOWN_SPEED_M_S:
             st.session_state.flight_status = "landed"
-            st.session_state.landing_score = round(
-                fuel_remaining / fuel_capacity * 100
+            st.session_state.landing_score = (
+                round(fuel_remaining / fuel_capacity * 100)
+                if fuel_capacity > 0
+                else 0
             )
             st.session_state.flight_result = "Successful Mission & Landing!"
         else:
             st.session_state.flight_status = "crashed"
             st.session_state.flight_result = (
-                f"Impact velocity {velocity:.1f} m/s exceeded the 5 m/s limit."
+                f"Impact velocity {velocity:.1f} m/s exceeded the "
+                f"{LANDING_SAFE_TOUCHDOWN_SPEED_M_S:g} m/s limit."
             )
 
 
-def _run_landing_action(
-    action: str,
-    altitude_metric: Any,
-    velocity_metric: Any,
-    fuel_metric: Any,
-    descent_bar: Any,
-    velocity_gauge: Any,
-) -> None:
-    """Animate a short retro-burn/freefall pulse with live telemetry updates."""
-    if st.session_state.interface_volume > 0:
-        _render_menu_sound(
-            st.session_state.interface_volume,
-            "thrust" if action == "burn" else "coast",
-        )
-    gravity = _landing_gravity(st.session_state.mission_destination)
-    estimated_fall_time = math.sqrt(
-        2 * st.session_state.landing_altitude_m / gravity
-    )
-    pulse_duration_s = min(
-        LANDING_ACTION_DURATION_S,
-        max(0.15, estimated_fall_time * 0.75),
-    )
-    frame_count = 8
-    frame_duration_s = pulse_duration_s / frame_count
-    accent = THEMES[st.session_state.visual_theme]["accent"]
-    for _ in range(frame_count):
-        _apply_landing_action(action, frame_duration_s)
-        altitude = st.session_state.landing_altitude_m
-        velocity = st.session_state.landing_velocity_m_s
-        fuel_remaining = st.session_state.flight_fuel_remaining_kg
-        altitude_metric.metric("Altitude", f"{altitude:,.0f} m")
-        velocity_metric.metric("Vertical velocity", f"{velocity:.1f} m/s", "downward")
-        fuel_metric.metric(
-            "Fuel remaining",
-            f"{fuel_remaining:,.0f} kg",
-            f"{fuel_remaining / st.session_state.flight_fuel_capacity_kg:.0%}",
-        )
-        descent_bar.progress(
-            min(max(1 - altitude / LANDING_START_ALTITUDE_M, 0), 1),
-            text="Descent to surface",
-        )
-        velocity_gauge.markdown(
-            _velocity_gauge_html(velocity, accent),
-            unsafe_allow_html=True,
-        )
+def _process_landing_event(event: Any) -> bool:
+    """Apply a sequenced landing snapshot or a bounded legacy physics step."""
+    if not isinstance(event, dict):
+        return False
+    if event.get("kind") == "snapshot":
+        event_id = event.get("event_id")
+        altitude = event.get("altitude_m")
+        velocity = event.get("velocity_m_s")
+        fuel_remaining = event.get("fuel_remaining_kg")
+        used_thrust = event.get("used_thrust")
+        numeric_values = (altitude, velocity, fuel_remaining)
+        if (
+            not isinstance(event_id, int)
+            or isinstance(event_id, bool)
+            or event_id < 1
+            or any(
+                not isinstance(value, (int, float))
+                or isinstance(value, bool)
+                or not math.isfinite(value)
+                for value in numeric_values
+            )
+            or not 0 <= altitude <= LANDING_START_ALTITUDE_M
+            or not 0 <= velocity <= 1000
+            or not 0 <= fuel_remaining
+            <= st.session_state.flight_fuel_capacity_kg
+            or not isinstance(used_thrust, bool)
+        ):
+            st.session_state.flight_status = "crashed"
+            st.session_state.flight_result = (
+                "Invalid landing-control data. Restart the landing attempt."
+            )
+            return True
+        if event_id <= st.session_state.landing_last_event_id:
+            return False
+
+        st.session_state.landing_last_event_id = event_id
         if st.session_state.flight_status != "landing":
-            st.rerun()
-        time.sleep(0.07)
+            return False
+
+        action = "burn" if used_thrust else "coast"
+        st.session_state.landing_last_action = action
+        st.session_state.landing_action_id += 1
+        st.session_state.landing_altitude_m = float(altitude)
+        st.session_state.landing_velocity_m_s = float(velocity)
+        st.session_state.flight_fuel_remaining_kg = float(fuel_remaining)
+
+        if altitude <= LANDING_CONTACT_ALTITUDE_M:
+            st.session_state.landing_altitude_m = 0.0
+            if velocity <= LANDING_SAFE_TOUCHDOWN_SPEED_M_S:
+                st.session_state.flight_status = "landed"
+                fuel_capacity = st.session_state.flight_fuel_capacity_kg
+                st.session_state.landing_score = (
+                    round(fuel_remaining / fuel_capacity * 100)
+                    if fuel_capacity > 0
+                    else 0
+                )
+                st.session_state.flight_result = "Successful Mission & Landing!"
+            else:
+                st.session_state.flight_status = "crashed"
+                st.session_state.flight_result = (
+                    f"Impact velocity {velocity:.1f} m/s exceeded the "
+                    f"{LANDING_SAFE_TOUCHDOWN_SPEED_M_S:g} m/s limit."
+                )
+        elif fuel_remaining <= 0:
+            st.session_state.flight_status = "crashed"
+            st.session_state.flight_result = "Fuel depleted before touchdown."
+        return True
+
+    if event.get("kind") != "step":
+        return False
+    event_id = event.get("event_id")
+    duration_s = event.get("duration_s")
+    thrusting = event.get("thrusting")
+    if (
+        not isinstance(event_id, int)
+        or isinstance(event_id, bool)
+        or event_id < 1
+        or not isinstance(duration_s, (int, float))
+        or isinstance(duration_s, bool)
+        or not math.isfinite(duration_s)
+        or not 0 < duration_s <= LANDING_MAX_STEP_DURATION_S
+        or not isinstance(thrusting, bool)
+    ):
+        st.session_state.flight_status = "crashed"
+        st.session_state.flight_result = (
+            "Invalid landing-control data. Restart the landing attempt."
+        )
+        return True
+    if event_id <= st.session_state.landing_last_event_id:
+        return False
+
+    st.session_state.landing_last_event_id = event_id
+    if st.session_state.flight_status != "landing":
+        return False
+
+    action = "burn" if thrusting else "coast"
+    if action != st.session_state.landing_last_action:
+        _queue_menu_sound("thrust" if action == "burn" else "coast")
+    st.session_state.landing_last_action = action
+    st.session_state.landing_action_id += 1
+    _apply_landing_action(action, float(duration_s))
+    return True
 
 
 def _restart_landing() -> None:
-    fuel_capacity = st.session_state.flight_fuel_capacity_kg
+    if (
+        st.session_state.flight_status != "crashed"
+        or st.session_state.landing_attempt_number >= LANDING_MAX_ATTEMPTS
+    ):
+        return
+    st.session_state.mission_phase = 5
     st.session_state.flight_status = "landing"
-    st.session_state.flight_fuel_remaining_kg = fuel_capacity
+    st.session_state.landing_attempt_number += 1
+    st.session_state.flight_fuel_remaining_kg = (
+        st.session_state.get(
+            "landing_start_fuel_kg",
+            st.session_state.flight_fuel_capacity_kg,
+        )
+    )
     st.session_state.landing_altitude_m = LANDING_START_ALTITUDE_M
-    st.session_state.landing_velocity_m_s = 8.0
+    st.session_state.landing_velocity_m_s = LANDING_START_VELOCITY_M_S
     st.session_state.landing_score = None
     st.session_state.flight_result = None
+    st.session_state.landing_action_id += 1
+    st.session_state.landing_last_action = None
     _queue_menu_action_sound()
 
 
@@ -1558,6 +1859,7 @@ def _run_trajectory_animation(destination: str, theme: dict[str, str]) -> None:
     distance_au = abs(ORBITAL_RADIUS_AU[destination] - 1.0)
     duration_seconds = _flight_duration_seconds(destination)
     fuel_capacity = st.session_state.flight_fuel_capacity_kg
+    fuel_start = st.session_state.flight_fuel_start_kg
     frame_count = max(10, math.ceil(duration_seconds / 0.4))
     frame_delay = duration_seconds / frame_count
     if st.session_state.interface_volume > 0:
@@ -1574,7 +1876,7 @@ def _run_trajectory_animation(destination: str, theme: dict[str, str]) -> None:
         )
     for frame in range(frame_count + 1):
         progress = frame / frame_count
-        fuel_remaining = fuel_capacity * (1.0 - 0.05 * progress)
+        fuel_remaining = fuel_start * (1.0 - 0.05 * progress)
         with telemetry.container():
             distance_col, eta_col, fuel_col = st.columns(3)
             distance_col.metric(
@@ -1589,140 +1891,82 @@ def _run_trajectory_animation(destination: str, theme: dict[str, str]) -> None:
             fuel_col.metric(
                 "Fuel level",
                 f"{fuel_remaining:,.0f} kg",
-                f"{(1.0 - 0.05 * progress):.0%}",
+                f"{fuel_remaining / fuel_capacity:.0%}",
             )
             st.progress(progress, text=f"Trajectory progress: {progress:.0%}")
         if frame < frame_count:
             time.sleep(frame_delay)
 
-    st.session_state.flight_fuel_remaining_kg = fuel_capacity * 0.95
+    st.session_state.flight_fuel_remaining_kg = fuel_start * 0.95
     st.session_state.flight_distance_au = distance_au
     st.session_state.flight_status = "arrival"
 
 
-def _velocity_gauge_html(velocity_m_s: float, accent: str) -> str:
-    marker = min(max(velocity_m_s / 25 * 100, 0), 100)
-    safe_zone_width = 5 / 25 * 100
-    return dedent(f"""
-    <div style="font:600 13px sans-serif;color:#eaf4ff;margin:8px 0 16px">
-      <div style="display:flex;justify-content:space-between;margin-bottom:7px">
-        <span>Vertical velocity target</span>
-        <span style="color:#76e3b2">SAFE ZONE · &lt; 5 m/s</span>
-      </div>
-      <div style="height:18px;border-radius:9px;position:relative;
-        background:linear-gradient(90deg,#174d42 0 {safe_zone_width}%,
-        #5c4331 {safe_zone_width}% 40%,#572f3b 100%);
-        border:1px solid rgba(220,235,250,.35)">
-        <div style="position:absolute;left:calc({marker}% - 2px);top:-5px;
-          height:26px;width:4px;border-radius:2px;background:{accent};
-          box-shadow:0 0 9px {accent}"></div>
-      </div>
-      <div style="display:flex;justify-content:space-between;color:#a9bbcf;
-        font-size:11px;margin-top:5px"><span>0 m/s</span><span>25+ m/s</span></div>
-    </div>
-    """).strip()
-
-
 def _show_landing_controls() -> None:
+    if (
+        st.session_state.landing_attempt_number == 0
+        and st.session_state.flight_status in ("landing", "landed", "crashed")
+    ):
+        st.session_state.landing_attempt_number = 1
+    _process_landing_event(st.session_state.get("landing_canvas"))
     destination = st.session_state.mission_destination
-    status = st.session_state.flight_status
     st.subheader(f"Landing Minigame — {destination}")
-    st.markdown(
-        "**How to land**\n"
-        "- Keep vertical speed **under 5 m/s** at touchdown.\n"
-        "- Each **Burn Retro-Thrust** click applies a short braking pulse; it "
-        "uses fuel and slows descent.\n"
-        "- Click **Coast / Freefall** to descend under arcade-scaled gravity; "
-        "gravity is capped at 3–6 m/s² and the control pulse shortens near "
-        "the surface to keep every destination landable.\n"
-        "- Watch altitude, speed, and fuel after every control. Too much impact "
-        "speed or running out of fuel above the safe zone causes a crash."
-    )
-    if status == "landing":
-        altitude_col, velocity_col, fuel_col = st.columns(3)
-        altitude_metric = altitude_col.empty()
-        velocity_metric = velocity_col.empty()
-        fuel_metric = fuel_col.empty()
-        altitude_metric.metric(
-            "Altitude",
-            f"{st.session_state.landing_altitude_m:,.0f} m",
-        )
-        velocity_metric.metric(
-            "Vertical velocity",
-            f"{st.session_state.landing_velocity_m_s:.1f} m/s",
-            "downward",
-        )
-        fuel_metric.metric(
-            "Fuel remaining",
-            f"{st.session_state.flight_fuel_remaining_kg:,.0f} kg",
-            f"{st.session_state.flight_fuel_remaining_kg / st.session_state.flight_fuel_capacity_kg:.0%}",
-        )
-        descent_bar = st.empty()
-        descent_bar.progress(
-            min(
-                max(
-                    1 - st.session_state.landing_altitude_m
-                    / LANDING_START_ALTITUDE_M,
-                    0,
+    canvas_slot = st.empty()
+    status = st.session_state.flight_status
+    if status == "landed":
+        _show_victory_scorecard()
+    elif status == "crashed":
+        attempts = st.session_state.landing_attempt_number
+        if attempts < LANDING_MAX_ATTEMPTS:
+            st.error(f"Landing attempt failed — {st.session_state.flight_result}")
+            st.caption("One retry remains. The retry starts with arrival fuel restored.")
+            st.button(
+                "Retry Landing",
+                key="restart_landing",
+                on_click=_restart_landing,
+                type="primary",
+            )
+        else:
+            _show_failure_scorecard(
+                "Phase 5 — Landing Control",
+                st.session_state.flight_result or "Landing attempt failed.",
+                attempts,
+                (
+                    ("Final altitude", f"{st.session_state.landing_altitude_m:.1f} m"),
+                    (
+                        "Impact speed",
+                        f"{st.session_state.landing_velocity_m_s:.1f} m/s",
+                    ),
+                    (
+                        "Fuel remaining",
+                        f"{st.session_state.flight_fuel_remaining_kg:,.0f} kg",
+                    ),
                 ),
-                1,
-            ),
-            text="Descent to surface",
-        )
-        velocity_gauge = st.empty()
-        velocity_gauge.markdown(
-            _velocity_gauge_html(
-                st.session_state.landing_velocity_m_s,
-                THEMES[st.session_state.visual_theme]["accent"],
-            ),
-            unsafe_allow_html=True,
-        )
-        burn_col, coast_col = st.columns(2)
-        if burn_col.button(
-            "🔥 Burn Retro-Thrust (Hold/Click)",
-            key="burn_retro_thrust",
-            type="primary",
-            disabled=st.session_state.flight_fuel_remaining_kg <= 0,
-            use_container_width=True,
-        ):
-            _run_landing_action(
-                "burn",
-                altitude_metric,
-                velocity_metric,
-                fuel_metric,
-                descent_bar,
-                velocity_gauge,
             )
-        if coast_col.button(
-            "🌌 Coast / Freefall",
-            key="coast_descent",
-            use_container_width=True,
-        ):
-            _run_landing_action(
-                "coast",
-                altitude_metric,
-                velocity_metric,
-                fuel_metric,
-                descent_bar,
-                velocity_gauge,
-            )
-    elif status == "landed":
-        st.success(
-            f"{st.session_state.flight_result} "
-            f"Fuel-efficiency score: {st.session_state.landing_score}/100."
-        )
-        st.button(
-            "Restart Landing",
-            key="restart_landing",
-            on_click=_restart_landing,
-        )
-    else:
-        st.error(f"Crash Landing — {st.session_state.flight_result}")
-        st.button(
-            "Restart Landing",
-            key="restart_landing",
-            on_click=_restart_landing,
-            type="primary",
+
+    with canvas_slot:
+        landing_canvas(
+            destination=destination,
+            altitude_m=st.session_state.landing_altitude_m,
+            velocity_m_s=st.session_state.landing_velocity_m_s,
+            fuel_capacity_kg=st.session_state.flight_fuel_capacity_kg,
+            fuel_remaining_kg=st.session_state.flight_fuel_remaining_kg,
+            retro_acceleration_m_s2=_landing_retro_acceleration(
+                _landing_gravity(destination)
+            ),
+            gravity_m_s2=_landing_gravity(destination),
+            status=st.session_state.flight_status,
+            result=st.session_state.get("flight_result"),
+            score=st.session_state.get("landing_score"),
+            last_action=st.session_state.landing_last_action,
+            action_id=st.session_state.landing_action_id,
+            last_event_id=st.session_state.landing_last_event_id,
+            height=500,
+            accent=THEMES[st.session_state.visual_theme]["accent"],
+            surface_gravity_m_s2=PLANET_GRAVITY_M_S2[destination],
+            contact_altitude_m=LANDING_CONTACT_ALTITUDE_M,
+            key="landing_canvas",
+            default=None,
         )
 
 
@@ -1753,6 +1997,15 @@ for key, default in (
     ("mission_fuel_tank", None),
     ("visual_theme", "Aurora"),
     ("interface_volume", DEFAULT_VOLUME),
+    ("slingshot_attempt_id", 0),
+    ("slingshot_attempt_number", 0),
+    ("slingshot_processed_attempt_id", None),
+    ("slingshot_outcome", None),
+    ("slingshot_bodies_orbited", 0),
+    ("landing_action_id", 0),
+    ("landing_last_action", None),
+    ("landing_last_event_id", 0),
+    ("landing_attempt_number", 0),
 ):
     if key not in st.session_state:
         st.session_state[key] = default
@@ -1992,9 +2245,9 @@ with configuration:
                 st.session_state.mission_destination,
             ).success
         )
-        st.markdown("#### Flight simulation")
+        st.markdown("#### Phase 3 — Gravity slingshot")
         st.button(
-            "🚀 Initiate Launch Sequence",
+            "🚀 Begin Gravity Slingshot",
             key="initiate_launch_sequence",
             type="primary",
             disabled=not launch_ready,
@@ -2006,6 +2259,81 @@ with configuration:
                 "Select every spacecraft system and an engine that meets the "
                 "required upthrust to unlock launch."
             )
+    elif st.session_state.mission_phase == 3:
+        route_bodies = trajectory_bodies(st.session_state.mission_destination)
+        st.write(
+            f"**Mission:** {st.session_state.selected_launch_site} → "
+            f"{st.session_state.mission_destination}"
+        )
+        st.subheader("Phase 3 — Gravitational Trajectory Slingshot")
+        st.caption(
+            "Drag backward from the rocket to aim, then release to launch. "
+            "The dotted preview uses a simplified arcade gravity model, not "
+            "a physically accurate orbital calculation."
+        )
+        st.caption(
+            "Flyby route: "
+            + " → ".join(body["name"] for body in route_bodies)
+        )
+        slingshot_event = gravity_slingshot(
+            destination=st.session_state.mission_destination,
+            bodies=route_bodies,
+            accent=theme["accent"],
+            attempt_id=st.session_state.slingshot_attempt_id,
+            attempts_remaining=max(
+                0,
+                SLINGSHOT_MAX_ATTEMPTS - st.session_state.slingshot_attempt_number,
+            ),
+            retry_allowed=(
+                st.session_state.slingshot_attempt_number < SLINGSHOT_MAX_ATTEMPTS
+            ),
+            outcome=st.session_state.slingshot_outcome,
+            key="gravity_slingshot",
+            default=None,
+        )
+        if _process_slingshot_event(slingshot_event):
+            st.rerun()
+
+        slingshot_outcome = st.session_state.slingshot_outcome
+        if slingshot_outcome and slingshot_outcome["status"] == "success":
+            st.success(slingshot_outcome["reason"])
+            st.button(
+                "Continue to Phase 4 — Interplanetary Flight",
+                key="continue_to_phase_four",
+                type="primary",
+                on_click=_continue_to_flight,
+                use_container_width=True,
+            )
+        elif slingshot_outcome:
+            if st.session_state.slingshot_attempt_number < SLINGSHOT_MAX_ATTEMPTS:
+                st.warning(slingshot_outcome["reason"])
+                st.caption("One retry remains. Adjust your launch angle and try again.")
+            else:
+                impact_speed = slingshot_outcome.get("impact_speed")
+                telemetry = (
+                    (
+                        "Trajectory result",
+                        f"{slingshot_outcome.get('bodies_orbited', 0)} gravity assists",
+                    ),
+                    (
+                        "Terminal speed",
+                        f"{impact_speed:.1f} units/s"
+                        if isinstance(impact_speed, (int, float))
+                        else "Not available",
+                    ),
+                    ("Attempts used", "2 / 2"),
+                )
+                _show_failure_scorecard(
+                    "Phase 3 — Gravitational Trajectory Slingshot",
+                    slingshot_outcome["reason"],
+                    st.session_state.slingshot_attempt_number,
+                    telemetry,
+                )
+        st.button(
+            "← Back to Mission Assembly",
+            key="back_to_assembly",
+            on_click=_return_to_assembly,
+        )
     else:
         st.write(
             f"**Mission:** {st.session_state.selected_launch_site} → "
@@ -2018,16 +2346,16 @@ with configuration:
         )
         if st.session_state.flight_status == "in_flight":
             _scroll_page_to_top()
-            st.subheader("Phase 3 — Interplanetary Flight")
+            st.subheader("Phase 4 — Interplanetary Flight")
             _run_trajectory_animation(
                 st.session_state.mission_destination,
                 theme,
             )
         if st.session_state.flight_status == "arrival":
-            st.subheader("Phase 3 — Interplanetary Flight")
+            st.subheader("Phase 4 — Interplanetary Flight")
             _show_arrival_screen()
         elif st.session_state.flight_status in ("landing", "landed", "crashed"):
-            st.subheader("Phase 3 — Landing Control")
+            st.subheader("Phase 5 — Landing Control")
             _show_landing_controls()
 
 with status:

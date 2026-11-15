@@ -124,6 +124,41 @@ FUEL_TANK_CHOICES: Dict[str, Dict[str, float]] = {
     "Heavy-Duty Deep Space Pod": {"mass_kg": 800},
 }
 
+COMPONENT_RESEARCH_POINTS: Dict[str, Dict[str, float]] = {
+    "hull": {
+        "Lightweight Aluminum Frame": 10,
+        "Carbon-Composite Shell": 20,
+        "Reinforced Titanium-Alloy Hull": 30,
+    },
+    "power": {
+        "Standard Solar Array Panels": 8,
+        "High-Efficiency Deep-Space Solar Wings": 16,
+        "Radioisotope Thermoelectric Generator (RTG)": 20,
+    },
+    "avionics": {
+        "Basic Sun & Earth Sensors": 5,
+        "Advanced IMU & Star Tracker": 12,
+        "Redundant Deep-Space Command Computer": 20,
+    },
+    "thermal": {
+        "Passive MLI Insulation Blankets": 5,
+        "Active Fluid-Loop Heat Exchangers": 12,
+        "Ablative Thermal Protection System (TPS) Shield": 20,
+    },
+    "instruments": {
+        "Optical Imaging Camera Suite": 10,
+        "Geological Drill & Sample Spectrometer": 25,
+        "Atmospheric Gas Analyzer": 20,
+    },
+}
+
+LAUNCH_SITE_DIFFICULTY_MULTIPLIERS: Dict[str, float] = {
+    "Guiana Space Centre": 1.0,
+    "Kennedy Space Center": 1.5,
+    "China Jiuquan Launch Center": 2.0,
+    "Baikonur Cosmodrome": 2.2,
+}
+
 
 @dataclass(frozen=True)
 class MissionResult:
@@ -132,6 +167,17 @@ class MissionResult:
     selected_upthrust: float
     success: bool
     progress_percentage: float
+
+
+@dataclass(frozen=True)
+class MissionScore:
+    research_points: float
+    launch_difficulty_multiplier: float
+    bodies_orbited: int
+    slingshot_body_bonus: float
+    fuel_remaining_percentage: float
+    fuel_efficiency_bonus: float
+    total_score: float
 
 
 def _selected_option(
@@ -225,4 +271,60 @@ def evaluate_mission(
         progress_percentage=(
             selected_upthrust / required_upthrust * 100 if has_requirement else 0.0
         ),
+    )
+
+
+def calculate_mission_score(
+    selected_components: Mapping[str, Optional[str]],
+    launch_site: str,
+    bodies_orbited: int,
+    remaining_fuel_kg: float,
+    starting_fuel_kg: float,
+) -> MissionScore:
+    """Score the arcade mission from research choices, risk, flybys, and fuel."""
+    research_points = 0.0
+    for category, weights in COMPONENT_RESEARCH_POINTS.items():
+        selection = selected_components.get(category)
+        if selection is None:
+            raise ValueError(f"Select a {category} component before scoring.")
+        try:
+            research_points += weights[selection]
+        except KeyError as error:
+            raise ValueError(
+                f"Unknown {category} component for research scoring: {selection!r}."
+            ) from error
+
+    try:
+        launch_multiplier = LAUNCH_SITE_DIFFICULTY_MULTIPLIERS[launch_site]
+    except KeyError as error:
+        raise ValueError(f"Unknown launch site for scoring: {launch_site!r}.") from error
+
+    if (
+        not isinstance(bodies_orbited, int)
+        or isinstance(bodies_orbited, bool)
+        or bodies_orbited < 0
+    ):
+        raise ValueError("The number of gravity-assist bodies must be a non-negative integer.")
+    fuel_values = (remaining_fuel_kg, starting_fuel_kg)
+    if any(
+        isinstance(value, bool)
+        or not isinstance(value, (int, float))
+        or not isfinite(value)
+        for value in fuel_values
+    ):
+        raise ValueError("Fuel values must be finite numbers of kilograms.")
+    if starting_fuel_kg <= 0 or not 0 <= remaining_fuel_kg <= starting_fuel_kg:
+        raise ValueError("Remaining fuel must be between zero and starting fuel.")
+
+    body_bonus = 1.0 + 0.2 * bodies_orbited
+    fuel_percentage = remaining_fuel_kg / starting_fuel_kg * 100
+    total_score = research_points * launch_multiplier * body_bonus + fuel_percentage
+    return MissionScore(
+        research_points=research_points,
+        launch_difficulty_multiplier=launch_multiplier,
+        bodies_orbited=bodies_orbited,
+        slingshot_body_bonus=body_bonus,
+        fuel_remaining_percentage=fuel_percentage,
+        fuel_efficiency_bonus=fuel_percentage,
+        total_score=round(total_score, 1),
     )

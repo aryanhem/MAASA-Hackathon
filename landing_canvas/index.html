@@ -1,0 +1,806 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    :root {
+      color-scheme: light dark;
+      font: 14px/1.45 system-ui, sans-serif;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      color: #eaf3ff;
+      background: transparent;
+    }
+    .panel {
+      overflow: hidden;
+      border: 1px solid rgba(148, 163, 184, .38);
+      border-radius: 18px;
+      background: #081321;
+      box-shadow: 0 16px 38px rgba(8, 15, 30, .22);
+    }
+    canvas {
+      display: block;
+      width: 100%;
+      height: auto;
+      touch-action: none;
+    }
+    .fuel-control {
+      display: block;
+      width: calc(100% - 28px);
+      min-height: 56px;
+      margin: 13px 14px 8px;
+      border: 0;
+      border-radius: 13px;
+      color: #07121a;
+      background: linear-gradient(110deg, #ffc45f, #ff8555 48%, #69d7ff);
+      box-shadow: 0 7px 22px rgba(255, 143, 67, .2);
+      font: 800 15px/1.25 system-ui, sans-serif;
+      letter-spacing: .02em;
+      cursor: pointer;
+      touch-action: none;
+      user-select: none;
+    }
+    .fuel-control[aria-pressed="true"] {
+      transform: translateY(1px);
+      box-shadow: inset 0 2px 6px rgba(7, 18, 26, .24),
+        0 0 24px rgba(102, 217, 255, .36);
+    }
+    .fuel-control:disabled {
+      color: #a7b3c2;
+      background: #273448;
+      box-shadow: none;
+      cursor: not-allowed;
+    }
+    .fuel-help {
+      display: flex;
+      height: 32px;
+      align-items: center;
+      justify-content: center;
+      padding: 0 14px;
+      color: #aebed0;
+      font: 11px/1.3 system-ui, sans-serif;
+      text-align: center;
+    }
+    .hint {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: space-between;
+      gap: 6px 16px;
+      padding: 9px 14px 12px;
+      color: #c4d2e3;
+      font-size: 12px;
+    }
+    .hint strong { color: #fff; }
+  </style>
+</head>
+<body>
+  <div class="panel">
+    <canvas id="landing" width="960" height="620"
+      aria-label="Continuous planetary descent with altitude and touchdown-speed gauges"></canvas>
+    <button class="fuel-control" id="fuel-control" type="button" aria-pressed="false">
+      HOLD TO BURN RETRO-THRUST
+    </button>
+    <div class="fuel-help" id="fuel-help">
+      Press and hold to decelerate; release to fall under planetary gravity.
+    </div>
+    <div class="hint">
+      <strong>Touchdown speed must be ≤ 6 m/s.</strong>
+      <span>Surface contact begins 4 m above the drawn ground.</span>
+    </div>
+  </div>
+  <script>
+    (() => {
+      "use strict";
+      const canvas = document.getElementById("landing");
+      const ctx = canvas.getContext("2d");
+      const fuelButton = document.getElementById("fuel-control");
+      const fuelHelp = document.getElementById("fuel-help");
+      const W = 960, H = 620, SURFACE_Y = 505;
+      const MAX_ALTITUDE = 180, MAX_VELOCITY = 30, SAFE_VELOCITY = 6;
+      const SURFACES = {
+        Moon: {
+          sky: ["#07101d", "#29364c"], haze: "#98acc8", ground: "#707c8c",
+          ridge: "#4b586a", cloud: "#bac5d3", terrain: "crater"
+        },
+        Mercury: {
+          sky: ["#151720", "#443f42"], haze: "#c5a891", ground: "#62564f",
+          ridge: "#392f30", cloud: "#ccb7a3", terrain: "crater"
+        },
+        Venus: {
+          sky: ["#372517", "#a7652c"], haze: "#ffd27a", ground: "#9b6840",
+          ridge: "#654029", cloud: "#f5c46e", terrain: "cloud"
+        },
+        Mars: {
+          sky: ["#1c1014", "#813c2e"], haze: "#f39b67", ground: "#9b4a32",
+          ridge: "#552d27", cloud: "#e8845b", terrain: "dune"
+        },
+        Jupiter: {
+          sky: ["#25181c", "#9d624b"], haze: "#ffca8c", ground: "#a97759",
+          ridge: "#704538", cloud: "#f1c18b", terrain: "bands"
+        },
+        Saturn: {
+          sky: ["#28231d", "#9c8760"], haze: "#f2db9e", ground: "#a28a62",
+          ridge: "#68563f", cloud: "#e6ce93", terrain: "bands"
+        },
+        Uranus: {
+          sky: ["#0b202b", "#398e9c"], haze: "#a8f3f0", ground: "#43818a",
+          ridge: "#23545f", cloud: "#a9e3df", terrain: "ice"
+        },
+        Neptune: {
+          sky: ["#07152b", "#14518c"], haze: "#7dc5ff", ground: "#173d70",
+          ridge: "#0c274d", cloud: "#8bcfff", terrain: "storm"
+        }
+      };
+      const stars = Array.from({length: 105}, (_, i) => ({
+        x: (i * 197 + 31) % W,
+        y: (i * 113 + 17) % (SURFACE_Y - 15),
+        r: .5 + (i % 4) * .28,
+        a: .18 + (i % 5) * .11
+      }));
+      let args = null;
+      let local = null;
+      let burning = false;
+      let lastFrameTime = 0;
+      let eventId = 0;
+      let lastAcknowledgedEventId = 0;
+      let burnedSinceSync = false;
+      let lastSentSnapshot = null;
+      let exhaust = [];
+      let explosion = [];
+      let terminalStart = 0;
+      let frameHeight = 0;
+
+      const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
+      const lerp = (start, end, amount) => start + (end - start) * amount;
+
+      function currentState(nextArgs) {
+        return {
+          altitude_m: Math.max(0, Number(nextArgs.altitude_m) || 0),
+          velocity_m_s: Math.max(0, Number(nextArgs.velocity_m_s) || 0),
+          fuel_remaining_kg: Math.max(0, Number(nextArgs.fuel_remaining_kg) || 0),
+          status: nextArgs.status || "landing",
+          result: nextArgs.result || null,
+          score: nextArgs.score
+        };
+      }
+
+      function setFuelButton() {
+        const enabled = args && args.status === "landing" && local
+          && local.status === "landing" && local.fuel_remaining_kg > 0;
+        fuelButton.disabled = !enabled;
+        fuelButton.setAttribute("aria-pressed", String(burning && enabled));
+        fuelButton.textContent = enabled
+          ? "HOLD TO BURN RETRO-THRUST"
+          : (local && local.status === "landed" ? "TOUCHDOWN COMPLETE" : "LANDING ENDED");
+        fuelHelp.textContent = !args || args.status !== "landing"
+          || !local || local.status !== "landing"
+          ? "Landing complete. Use the restart control to attempt another descent."
+          : (local && local.fuel_remaining_kg <= 0
+            ? "Fuel depleted — restart to attempt another landing."
+            : "Press and hold to decelerate; release to fall under planetary gravity.");
+      }
+
+      function rocketY(altitude) {
+        const top = 130, bottom = SURFACE_Y - 25;
+        return lerp(bottom, top, clamp(altitude / MAX_ALTITUDE, 0, 1));
+      }
+
+      function spawnExhaust() {
+        exhaust = Array.from({length: 40}, (_, i) => ({
+          x: W / 2 + (Math.random() - .5) * 13,
+          y: rocketY(local.altitude_m) + 25,
+          vx: (Math.random() - .5) * 1.8,
+          vy: 1.2 + Math.random() * 4.2,
+          age: 0,
+          life: .35 + Math.random() * .55,
+          radius: 2 + Math.random() * 4,
+          hue: i % 3 === 0 ? 203 : (i % 2 === 0 ? 29 : 14)
+        }));
+      }
+
+      function spawnExplosion() {
+        const y = rocketY(local.altitude_m);
+        explosion = Array.from({length: 78}, () => {
+          const angle = Math.random() * Math.PI * 2;
+          const speed = 1.1 + Math.random() * 5.2;
+          return {
+            x: W / 2, y,
+            vx: Math.cos(angle) * speed,
+            vy: Math.sin(angle) * speed,
+            age: 0,
+            life: .7 + Math.random() * 1.1,
+            radius: 2 + Math.random() * 5,
+            hue: Math.random() > .35 ? 21 : 4
+          };
+        });
+        terminalStart = performance.now();
+      }
+
+      function snapshotKey() {
+        return [
+          local.altitude_m.toFixed(4),
+          local.velocity_m_s.toFixed(4),
+          local.fuel_remaining_kg.toFixed(4),
+          local.status,
+          burnedSinceSync
+        ].join("|");
+      }
+
+      function sendSnapshot() {
+        if (!local || !args) return;
+        const key = snapshotKey();
+        if (key === lastSentSnapshot) return;
+        const usedThrust = burnedSinceSync;
+        eventId = Math.max(eventId, lastAcknowledgedEventId) + 1;
+        window.parent.postMessage({
+          isStreamlitMessage: true,
+          type: "streamlit:setComponentValue",
+          value: {
+            kind: "snapshot",
+            event_id: eventId,
+            altitude_m: local.altitude_m,
+            velocity_m_s: local.velocity_m_s,
+            fuel_remaining_kg: local.fuel_remaining_kg,
+            used_thrust: usedThrust
+          },
+          dataType: "json"
+        }, "*");
+        burnedSinceSync = false;
+        lastSentSnapshot = snapshotKey();
+      }
+
+      function integrateSegment(duration, acceleration) {
+        if (duration <= 0 || local.status !== "landing") return false;
+        const contactAltitude = args.contact_altitude_m;
+        const distanceToContact = local.altitude_m - contactAltitude;
+        if (distanceToContact <= 0) {
+          landNow(local.velocity_m_s);
+          return true;
+        }
+        const stopTime = acceleration < 0
+          && local.velocity_m_s + acceleration * duration < 0
+          ? local.velocity_m_s / -acceleration
+          : duration;
+        const travelled = Math.max(
+          0,
+          local.velocity_m_s * stopTime + .5 * acceleration * stopTime * stopTime
+        );
+        if (travelled >= distanceToContact) {
+          const impact = Math.sqrt(Math.max(
+            0,
+            local.velocity_m_s * local.velocity_m_s
+              + 2 * acceleration * distanceToContact
+          ));
+          landNow(impact);
+          return true;
+        }
+        local.altitude_m -= travelled;
+        local.velocity_m_s = Math.max(
+          0,
+          local.velocity_m_s + acceleration * duration
+        );
+        return false;
+      }
+
+      function descentGravity(velocity) {
+        const speedFraction = clamp(velocity / SAFE_VELOCITY, 0, 1);
+        return args.gravity_m_s2 * (.15 + .85 * speedFraction);
+      }
+
+      function landNow(impactSpeed) {
+        local.altitude_m = 0;
+        local.velocity_m_s = impactSpeed;
+        local.status = impactSpeed <= SAFE_VELOCITY ? "landed" : "crashed";
+        local.result = local.status === "landed"
+          ? "Successful Mission & Landing!"
+          : `Impact velocity ${impactSpeed.toFixed(1)} m/s exceeded the ${SAFE_VELOCITY} m/s limit.`;
+        burning = false;
+        terminalStart = performance.now();
+        if (local.status === "crashed") spawnExplosion();
+        setFuelButton();
+      }
+
+      function integrate(duration, thrusting) {
+        if (!local || local.status !== "landing") return;
+        const retro = args.retro_acceleration_m_s2;
+        const fuelRate = args.fuel_capacity_kg * .03 / 4;
+        let remaining = duration;
+        if (thrusting && local.fuel_remaining_kg > 0 && fuelRate > 0) {
+          const burnTime = Math.min(remaining, local.fuel_remaining_kg / fuelRate);
+          local.fuel_remaining_kg = Math.max(
+            0,
+            local.fuel_remaining_kg - burnTime * fuelRate
+          );
+          integrateSegment(burnTime, descentGravity(local.velocity_m_s) - retro);
+          remaining -= burnTime;
+          if (local.status === "landing" && local.fuel_remaining_kg <= .0001) {
+            local.status = "crashed";
+            local.result = "Fuel depleted before touchdown.";
+            burning = false;
+            terminalStart = performance.now();
+            spawnExplosion();
+          }
+        }
+        if (remaining > .0001 && local.status === "landing") {
+          integrateSegment(remaining, descentGravity(local.velocity_m_s));
+        }
+      }
+
+      function advanceSimulation(now) {
+        const dt = lastFrameTime
+          ? clamp((now - lastFrameTime) / 1000, 0, .25) : 0;
+        lastFrameTime = now;
+        if (args && local && local.status === "landing" && dt > 0) {
+          integrate(dt, burning);
+        }
+        return dt;
+      }
+
+      function playControlCue(frequency) {
+        const AudioContext = window.AudioContext || window.webkitAudioContext;
+        if (!AudioContext) return;
+        const context = new AudioContext();
+        const oscillator = context.createOscillator();
+        const gain = context.createGain();
+        oscillator.frequency.value = frequency;
+        gain.gain.setValueAtTime(.035, context.currentTime);
+        gain.gain.exponentialRampToValueAtTime(.001, context.currentTime + .12);
+        oscillator.connect(gain);
+        gain.connect(context.destination);
+        oscillator.start();
+        oscillator.stop(context.currentTime + .12);
+        oscillator.onended = () => context.close();
+      }
+
+      function setBurning(value) {
+        if (!args || args.status !== "landing" || !local
+            || local.status !== "landing"
+            || local.fuel_remaining_kg <= 0 || burning === value) return;
+        advanceSimulation(performance.now());
+        burning = value;
+        if (burning) {
+          burnedSinceSync = true;
+          spawnExhaust();
+        } else {
+          playControlCue(520);
+        }
+        if (burning) playControlCue(185);
+        setFuelButton();
+      }
+
+      function drawSky(style, timeSeconds) {
+        const sky = ctx.createLinearGradient(0, 0, 0, SURFACE_Y);
+        sky.addColorStop(0, style.sky[0]);
+        sky.addColorStop(1, style.sky[1]);
+        ctx.fillStyle = sky;
+        ctx.fillRect(0, 0, W, SURFACE_Y);
+        for (const star of stars) {
+          ctx.globalAlpha = star.a;
+          ctx.fillStyle = "#e7f2ff";
+          ctx.beginPath();
+          ctx.arc(star.x, star.y, star.r, 0, Math.PI * 2);
+          ctx.fill();
+        }
+        ctx.globalAlpha = 1;
+
+        const haze = ctx.createRadialGradient(W / 2, SURFACE_Y - 12, 12,
+          W / 2, SURFACE_Y - 20, 310);
+        haze.addColorStop(0, style.haze + "46");
+        haze.addColorStop(1, style.haze + "00");
+        ctx.fillStyle = haze;
+        ctx.fillRect(0, 90, W, SURFACE_Y - 60);
+
+        if (style.terrain === "bands" || style.terrain === "storm"
+            || style.terrain === "cloud") {
+          ctx.save();
+          ctx.globalAlpha = style.terrain === "storm" ? .19 : .15;
+          ctx.strokeStyle = style.cloud;
+          ctx.lineWidth = style.terrain === "storm" ? 9 : 12;
+          for (let band = 0; band < 7; band++) {
+            const y = 142 + band * 48 + Math.sin(timeSeconds * .28 + band) * 4;
+            ctx.beginPath();
+            ctx.moveTo(92, y);
+            ctx.bezierCurveTo(270, y - 18, 660, y + 22, 878, y - 8);
+            ctx.stroke();
+          }
+          if (style.terrain === "storm") {
+            ctx.fillStyle = style.cloud + "88";
+            ctx.beginPath();
+            ctx.ellipse(715, 310, 54, 18, -.12, 0, Math.PI * 2);
+            ctx.fill();
+          }
+          ctx.restore();
+        }
+      }
+
+      function drawSurface(style, timeSeconds) {
+        const ground = ctx.createLinearGradient(0, SURFACE_Y, 0, H);
+        ground.addColorStop(0, style.ground);
+        ground.addColorStop(1, style.ridge);
+        ctx.fillStyle = ground;
+        ctx.fillRect(0, SURFACE_Y, W, H - SURFACE_Y);
+
+        ctx.fillStyle = style.ridge;
+        ctx.beginPath();
+        ctx.moveTo(0, SURFACE_Y + 18);
+        for (let x = 0; x <= W; x += 60) {
+          const y = SURFACE_Y + 9 + Math.sin(x * .018 + timeSeconds * .13) * 8
+            + Math.sin(x * .043) * 4;
+          ctx.lineTo(x, y);
+        }
+        ctx.lineTo(W, H);
+        ctx.lineTo(0, H);
+        ctx.closePath();
+        ctx.fill();
+
+        if (style.terrain === "bands" || style.terrain === "storm"
+            || style.terrain === "cloud") {
+          ctx.save();
+          ctx.globalAlpha = .3;
+          ctx.strokeStyle = style.cloud;
+          ctx.lineWidth = 8;
+          for (let i = 0; i < 4; i++) {
+            const y = SURFACE_Y + 28 + i * 27;
+            ctx.beginPath();
+            ctx.moveTo(0, y);
+            ctx.bezierCurveTo(235, y - 12, 690, y + 18, W, y - 3);
+            ctx.stroke();
+          }
+          ctx.restore();
+        } else if (style.terrain === "crater") {
+          ctx.save();
+          ctx.globalAlpha = .34;
+          for (let i = 0; i < 7; i++) {
+            const x = 74 + i * 139;
+            const y = SURFACE_Y + 39 + (i % 2) * 22;
+            ctx.strokeStyle = style.cloud;
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.ellipse(x, y, 17 + (i % 3) * 7, 5 + (i % 2) * 3, 0, 0, Math.PI * 2);
+            ctx.stroke();
+          }
+          ctx.restore();
+        } else {
+          ctx.save();
+          ctx.globalAlpha = .34;
+          ctx.strokeStyle = style.cloud;
+          ctx.lineWidth = 3;
+          for (let i = 0; i < 5; i++) {
+            const x = i * 230 - 30;
+            ctx.beginPath();
+            ctx.moveTo(x, SURFACE_Y + 52 + i % 2 * 15);
+            ctx.quadraticCurveTo(x + 95, SURFACE_Y + 20, x + 190, SURFACE_Y + 58);
+            ctx.stroke();
+          }
+          ctx.restore();
+        }
+      }
+
+      function drawGauge(x, label, value, max, unit, safeMax, velocityGauge) {
+        const top = 170, bottom = 468, trackHeight = bottom - top, width = 17;
+        const markerY = bottom - clamp(value / max, 0, 1) * trackHeight;
+        const safeY = bottom - safeMax / max * trackHeight;
+        ctx.save();
+        ctx.fillStyle = "rgba(5, 13, 24, .76)";
+        ctx.strokeStyle = "rgba(188, 211, 235, .3)";
+        ctx.beginPath();
+        ctx.roundRect(x - 25, 128, 70, 374, 16);
+        ctx.fill();
+        ctx.stroke();
+        ctx.textAlign = "center";
+        ctx.fillStyle = "#dce9f8";
+        ctx.font = "700 11px system-ui, sans-serif";
+        ctx.fillText(label, x + 9, 150);
+        ctx.fillStyle = "#122137";
+        ctx.beginPath();
+        ctx.roundRect(x, top, width, trackHeight, 8);
+        ctx.fill();
+        if (velocityGauge) {
+          ctx.fillStyle = "#1c735e";
+          ctx.beginPath();
+          ctx.roundRect(x, safeY, width, bottom - safeY, 8);
+          ctx.fill();
+        }
+        ctx.fillStyle = velocityGauge ? "#fbbf67" : "#66d9ff";
+        ctx.globalAlpha = .76;
+        ctx.fillRect(x + 2, markerY, width - 4, bottom - markerY);
+        ctx.globalAlpha = 1;
+        ctx.fillStyle = "#fff";
+        ctx.shadowColor = velocityGauge ? "#fbbf67" : "#66d9ff";
+        ctx.shadowBlur = 12;
+        ctx.beginPath();
+        ctx.arc(x + width / 2, markerY, 7, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.shadowBlur = 0;
+        ctx.font = "600 10px system-ui, sans-serif";
+        ctx.fillStyle = "#c6d6e8";
+        ctx.textAlign = "left";
+        ctx.fillText(`${max}${unit}`, x - 20, top - 8);
+        ctx.fillText(`${value.toFixed(value < 10 ? 1 : 0)}${unit}`, x - 20, bottom + 20);
+        ctx.textAlign = "center";
+        ctx.font = "700 9px system-ui, sans-serif";
+        if (velocityGauge) {
+          ctx.fillStyle = "#9df2c9";
+          ctx.fillText("SAFE", x + 9, safeY - 8);
+          ctx.fillText(`≤ ${SAFE_VELOCITY}`, x + 9, bottom + 34);
+        } else {
+          ctx.fillStyle = "#b9dfff";
+          ctx.fillText("ALT", x + 9, bottom + 34);
+        }
+        ctx.restore();
+      }
+
+      function drawRocket(x, y, velocity, flameOn) {
+        const tilt = clamp((velocity - 8) * .008, -.08, .18);
+        ctx.save();
+        ctx.translate(x, y);
+        ctx.rotate(tilt);
+        if (flameOn) {
+          const flicker = .8 + Math.sin(performance.now() * .04) * .12;
+          const flame = ctx.createLinearGradient(0, 17, 0, 65 * flicker);
+          flame.addColorStop(0, "rgba(93,220,255,.95)");
+          flame.addColorStop(.38, "rgba(255,176,77,.9)");
+          flame.addColorStop(1, "rgba(255,91,37,0)");
+          ctx.fillStyle = flame;
+          ctx.beginPath();
+          ctx.moveTo(-8, 17);
+          ctx.quadraticCurveTo(-3, 42 * flicker, 0, 62 * flicker);
+          ctx.quadraticCurveTo(5, 39 * flicker, 8, 17);
+          ctx.closePath();
+          ctx.fill();
+        }
+        ctx.shadowColor = args.accent || "#8cdfff";
+        ctx.shadowBlur = 15;
+        ctx.fillStyle = "#eef7ff";
+        ctx.beginPath();
+        ctx.moveTo(0, -31);
+        ctx.quadraticCurveTo(11, -18, 13, 9);
+        ctx.lineTo(18, 19);
+        ctx.lineTo(9, 17);
+        ctx.lineTo(7, 25);
+        ctx.lineTo(-7, 25);
+        ctx.lineTo(-9, 17);
+        ctx.lineTo(-18, 19);
+        ctx.lineTo(-13, 9);
+        ctx.quadraticCurveTo(-11, -18, 0, -31);
+        ctx.fill();
+        ctx.shadowBlur = 0;
+        ctx.fillStyle = "#3e98d4";
+        ctx.beginPath();
+        ctx.ellipse(0, -2, 4, 6, 0, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = "#63788e";
+        ctx.fillRect(-6, 11, 12, 4);
+        ctx.restore();
+      }
+
+      function drawParticles(particles, dt, explosionMode) {
+        for (let i = particles.length - 1; i >= 0; i--) {
+          const p = particles[i];
+          p.age += dt;
+          p.x += p.vx;
+          p.y += p.vy;
+          if (p.age >= p.life) {
+            particles.splice(i, 1);
+            continue;
+          }
+          const alpha = 1 - p.age / p.life;
+          ctx.globalAlpha = alpha;
+          ctx.fillStyle = `hsla(${p.hue}, 100%, ${explosionMode ? 58 : 62}%, ${alpha})`;
+          ctx.shadowColor = explosionMode ? "#ff612e" : "#ffad4d";
+          ctx.shadowBlur = explosionMode ? 18 : 13;
+          ctx.beginPath();
+          ctx.arc(p.x, p.y, p.radius * alpha + 1, 0, Math.PI * 2);
+          ctx.fill();
+        }
+        ctx.globalAlpha = 1;
+        ctx.shadowBlur = 0;
+      }
+
+      function drawOutcome(now) {
+        if (!local || (local.status !== "landed" && local.status !== "crashed")) return;
+        ctx.fillStyle = "rgba(3, 9, 18, .83)";
+        ctx.fillRect(174, 218, 612, 144);
+        ctx.strokeStyle = local.status === "landed" ? "#69edb8" : "#ff775e";
+        ctx.lineWidth = 2;
+        ctx.strokeRect(174, 218, 612, 144);
+        ctx.textAlign = "center";
+        ctx.fillStyle = local.status === "landed" ? "#b4ffdc" : "#ffd0c7";
+        ctx.font = "800 27px system-ui, sans-serif";
+        ctx.fillText(local.status === "landed" ? "TOUCHDOWN CONFIRMED" : "LANDING FAILED", W / 2, 268);
+        ctx.fillStyle = "#e5edf8";
+        ctx.font = "14px system-ui, sans-serif";
+        ctx.fillText(local.result || "", W / 2, 299, 560);
+        if (local.status === "landed") {
+          ctx.fillStyle = "#9df2c9";
+          ctx.font = "700 13px system-ui, sans-serif";
+          ctx.fillText(`FUEL EFFICIENCY  ${local.score ?? 0}/100`, W / 2, 330);
+        } else if (now - terminalStart < 2200 && explosion.length) {
+          ctx.fillStyle = `rgba(255, 139, 55, ${.06 + Math.sin(now / 70) * .025})`;
+          ctx.beginPath();
+          ctx.arc(W / 2, 390, 105, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      }
+
+      function render(now, dt) {
+        if (!args || !local) return;
+        const style = SURFACES[args.destination] || SURFACES.Moon;
+        const seconds = now / 1000;
+        drawSky(style, seconds);
+        drawSurface(style, seconds);
+
+        ctx.fillStyle = "#e9f2ff";
+        ctx.textAlign = "left";
+        ctx.font = "800 13px system-ui, sans-serif";
+        ctx.fillText(`${args.destination.toUpperCase()} DESCENT`, 32, 38);
+        ctx.fillStyle = "#b5cbe1";
+        ctx.font = "11px system-ui, sans-serif";
+        ctx.fillText(
+          `SURFACE GRAVITY  ${args.surface_gravity_m_s2.toFixed(2)} m/s²`
+            + `   ·   SOFT-START BELOW ${SAFE_VELOCITY} m/s`,
+          32,
+          58
+        );
+
+        const fuelRatio = args.fuel_capacity_kg > 0
+          ? clamp(local.fuel_remaining_kg / args.fuel_capacity_kg, 0, 1) : 0;
+        const cards = [
+          ["ALTITUDE", `${Math.round(local.altitude_m)} m`],
+          ["VERTICAL SPEED", `${local.velocity_m_s.toFixed(1)} m/s`],
+          ["FUEL", `${Math.round(local.fuel_remaining_kg)} kg`]
+        ];
+        cards.forEach((card, index) => {
+          const x = 337 + index * 146;
+          ctx.fillStyle = "rgba(5, 13, 24, .78)";
+          ctx.strokeStyle = "rgba(188, 211, 235, .24)";
+          ctx.beginPath();
+          ctx.roundRect(x, 76, 134, 54, 11);
+          ctx.fill();
+          ctx.stroke();
+          ctx.textAlign = "center";
+          ctx.fillStyle = "#a9bdd3";
+          ctx.font = "700 9px system-ui, sans-serif";
+          ctx.fillText(card[0], x + 67, 95);
+          ctx.fillStyle = "#f5f9ff";
+          ctx.font = "700 15px system-ui, sans-serif";
+          ctx.fillText(card[1], x + 67, 117);
+        });
+
+        drawGauge(64, "ALTITUDE", local.altitude_m, MAX_ALTITUDE, " m", 0, false);
+        drawGauge(872, "SPEED", local.velocity_m_s, MAX_VELOCITY, " m/s", SAFE_VELOCITY, true);
+
+        const y = local.status === "landed"
+          ? SURFACE_Y - 25 : rocketY(local.altitude_m);
+        drawRocket(W / 2, y, local.velocity_m_s, burning && local.status === "landing");
+        drawParticles(exhaust, dt, false);
+        drawParticles(explosion, dt, true);
+
+        ctx.textAlign = "center";
+        ctx.fillStyle = "#f4f8ff";
+        ctx.font = "700 12px system-ui, sans-serif";
+        ctx.fillText("LANDING ZONE", W / 2, SURFACE_Y + 74);
+        if (local.status === "landing") {
+          ctx.fillStyle = "#b8cce1";
+          ctx.font = "11px system-ui, sans-serif";
+          ctx.fillText("Contact at 4 m · keep touchdown speed in the green zone", W / 2, SURFACE_Y + 94);
+        }
+        drawOutcome(now);
+        if (fuelRatio < .2 && local.status === "landing") {
+          ctx.fillStyle = "#ffb17a";
+          ctx.font = "700 10px system-ui, sans-serif";
+          ctx.textAlign = "center";
+          ctx.fillText("LOW FUEL", W - 54, 114);
+        }
+      }
+
+      function animationFrame(now) {
+        const dt = advanceSimulation(now);
+        if (local && local.status !== "landing") sendSnapshot();
+        render(now, dt);
+        requestAnimationFrame(animationFrame);
+      }
+
+      function applyArgs(nextArgs) {
+        if (!nextArgs || typeof nextArgs !== "object") return;
+        const previousArgs = args;
+        const wasFirstRender = !previousArgs;
+        const statusChanged = previousArgs
+          && nextArgs.status !== previousArgs.status;
+        const nextState = currentState(nextArgs);
+        const acknowledged = Number(nextArgs.last_event_id) || 0;
+        if (wasFirstRender || statusChanged || acknowledged > lastAcknowledgedEventId) {
+          local = nextState;
+          lastFrameTime = performance.now();
+          lastAcknowledgedEventId = acknowledged;
+          eventId = Math.max(eventId, acknowledged);
+          burnedSinceSync = false;
+          lastSentSnapshot = snapshotKey();
+          if (statusChanged && nextArgs.status === "crashed") {
+            spawnExplosion();
+          } else if (statusChanged && nextArgs.status === "landed") {
+            terminalStart = performance.now();
+            explosion = [];
+          } else if (statusChanged && nextArgs.status === "landing") {
+            explosion = [];
+            burning = false;
+          }
+        }
+        args = nextArgs;
+        if (args.status !== "landing") burning = false;
+        setFuelButton();
+        requestAnimationFrame(setFrameHeight);
+        render(performance.now(), 0);
+      }
+
+      function setFrameHeight() {
+        const panel = document.querySelector(".panel");
+        if (!panel) return;
+        const height = Math.ceil(panel.getBoundingClientRect().height);
+        if (height > 0 && height !== frameHeight) {
+          frameHeight = height;
+          window.parent.postMessage({
+            isStreamlitMessage: true,
+            type: "streamlit:setFrameHeight",
+            height
+          }, "*");
+        }
+      }
+
+      fuelButton.addEventListener("pointerdown", event => {
+        event.preventDefault();
+        if (fuelButton.disabled) return;
+        fuelButton.setPointerCapture(event.pointerId);
+        setBurning(true);
+      });
+      fuelButton.addEventListener("pointerup", event => {
+        if (fuelButton.hasPointerCapture(event.pointerId)) {
+          fuelButton.releasePointerCapture(event.pointerId);
+        }
+        setBurning(false);
+      });
+      fuelButton.addEventListener("pointercancel", () => {
+        setBurning(false);
+      });
+      fuelButton.addEventListener("lostpointercapture", () => {
+        setBurning(false);
+      });
+      fuelButton.addEventListener("keydown", event => {
+        if (event.code === "Space" || event.code === "Enter") {
+          event.preventDefault();
+          setBurning(true);
+        }
+      });
+      fuelButton.addEventListener("keyup", event => {
+        if (event.code === "Space" || event.code === "Enter") {
+          event.preventDefault();
+          setBurning(false);
+        }
+      });
+      window.addEventListener("blur", () => {
+        setBurning(false);
+      });
+      window.addEventListener("message", event => {
+        if (event.data && event.data.type === "streamlit:render") {
+          applyArgs(event.data.args || {});
+        }
+      });
+      window.parent.postMessage({
+        isStreamlitMessage: true,
+        type: "streamlit:componentReady",
+        apiVersion: 1
+      }, "*");
+      if ("ResizeObserver" in window) {
+        new ResizeObserver(() => requestAnimationFrame(setFrameHeight))
+          .observe(document.querySelector(".panel"));
+      } else {
+        window.addEventListener("resize", () => requestAnimationFrame(setFrameHeight));
+      }
+      requestAnimationFrame(animationFrame);
+    })();
+  </script>
+</body>
+</html>

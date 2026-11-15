@@ -8,6 +8,7 @@ from mission_design import (
     HULL_MINIMUM_BY_DESTINATION,
     LAUNCHPAD_MODIFIERS,
     LAUNCH_SITES,
+    calculate_mission_score,
     calculate_required_upthrust,
     calculate_total_mass,
     evaluate_mission,
@@ -138,6 +139,39 @@ class MissionDesignTests(unittest.TestCase):
                 "Neptune": "Reinforced Titanium-Alloy Hull",
             },
         )
+
+    def test_mission_score_combines_research_risk_gravity_assists_and_fuel(self):
+        score = calculate_mission_score(
+            self.components,
+            "Kennedy Space Center",
+            2,
+            remaining_fuel_kg=500,
+            starting_fuel_kg=1000,
+        )
+
+        self.assertEqual(score.research_points, 38)
+        self.assertEqual(score.launch_difficulty_multiplier, 1.5)
+        self.assertEqual(score.slingshot_body_bonus, 1.4)
+        self.assertEqual(score.fuel_efficiency_bonus, 50)
+        self.assertEqual(score.total_score, 129.8)
+
+    def test_mission_score_rejects_missing_components_and_invalid_fuel(self):
+        with self.assertRaisesRegex(ValueError, "Select a power component"):
+            calculate_mission_score(
+                {"hull": self.components["hull"]},
+                "Guiana Space Centre",
+                0,
+                100,
+                100,
+            )
+        with self.assertRaisesRegex(ValueError, "between zero and starting fuel"):
+            calculate_mission_score(
+                self.components,
+                "Guiana Space Centre",
+                0,
+                101,
+                100,
+            )
 
 
 if __name__ == "__main__":
