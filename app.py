@@ -2146,6 +2146,50 @@ with st.sidebar.expander("About NASA Space Apps"):
         "not a physical rocket simulation."
     )
 
+with st.sidebar.expander("Simulation Fidelity & Engineering Assumptions"):
+    st.write(
+        "This is an educational arcade simulation, not a flight-design tool. "
+        "Real missions must model several coupled effects that this game "
+        "deliberately simplifies or omits."
+    )
+    st.markdown(
+        "- **Atmospheric drag:** launch vehicles account for changing air "
+        "density, speed, vehicle shape, and heating; drag is often approximated "
+        "as `F_D = ½ ρ v² C_D A`.\n"
+        "- **Orbital perturbations:** trajectories are affected by multiple "
+        "bodies, non-spherical gravity fields, solar radiation pressure, and "
+        "other disturbances. This game uses a bounded two-dimensional arcade "
+        "gravity model.\n"
+        "- **Staging:** real launch vehicles discard empty stages and account "
+        "for changing mass, engine performance, and stage-separation events; "
+        "the game uses a single assembled spacecraft.\n"
+        "- **Orbit and attitude:** Kepler's laws describe idealized orbital "
+        "motion, while perturbations can make real orbits evolve. Orbit alone "
+        "does not determine how sunlight and planetary heat affect a spacecraft: "
+        "its attitude (orientation), reference frame, and the surface's angle "
+        "to incoming radiation matter too.\n"
+        "- **Budget and mass:** real missions face strict cost, mass, reliability, "
+        "and schedule limits. Game component weights and score bonuses are "
+        "illustrative, not engineering estimates."
+    )
+    st.markdown("**Further research**")
+    st.markdown(
+        "- [NASA Glenn Research Center — Ideal Rocket Equation]"
+        "(https://www1.grc.nasa.gov/beginners-guide-to-aeronautics/ideal-rocket-equation/)\n"
+        "- [NASA — Introduction to Orbital Mechanics and Spacecraft Attitudes]"
+        "(https://tfaws.nasa.gov/wp-content/uploads/Rickman-Presentation.pdf)\n"
+        "- [NASA JPL — Basics of Space Flight: Gravity & Mechanics]"
+        "(https://science.nasa.gov/learn/basics-of-space-flight/chapter3-1/)"
+    )
+
+st.sidebar.caption(
+    "Disclosure: Super Intelligence (SI/AI) tool assistance was used to "
+    "accelerate the code structure, UI layout, and physics calculations for "
+    "Project M.A.A.S.A. This note supports transparent disclosure and "
+    "hackathon-guideline compliance; the team is responsible for confirming "
+    "the applicable rules."
+)
+
 theme = THEMES[st.session_state.visual_theme]
 _apply_theme(theme)
 
@@ -2204,6 +2248,15 @@ with configuration:
             format_func=lambda value: value or "Choose a launch site",
         )
         st.session_state.selected_launch_site = selected_site
+        if selected_site == "Guiana Space Centre":
+            st.caption(
+                "The Guiana Space Centre, in French Guiana, is known as "
+                "Europe's Spaceport."
+            )
+            st.markdown(
+                "[ESA & CNES — Guiana Space Centre (Europe's Spaceport)]"
+                "(https://centrespatialguyanais.cnes.fr/en)"
+            )
 
         destination_options = [None, *DESTINATION_DIFFICULTY]
         if "destination_picker" not in st.session_state:
@@ -2364,6 +2417,38 @@ with configuration:
             "Flyby route: "
             + " → ".join(body["name"] for body in route_bodies)
         )
+        with st.expander("Real physics: gravity assists and rocket Δv"):
+            st.markdown(
+                "A **gravity assist** uses a planet's motion to change a "
+                "spacecraft's heliocentric velocity. In the planet's frame, "
+                "the idealized encounter mainly redirects velocity; in the "
+                "Sun's frame, the spacecraft can gain or lose orbital energy. "
+                "Real mission design models encounter geometry and patched or "
+                "numerically integrated trajectories. NASA's orbital-mechanics "
+                "presentation also covers the two-body problem, Kepler's laws, "
+                "conservation of energy and momentum, orbit perturbations, and "
+                "reference-frame and attitude transformations. NASA JPL's "
+                "gravity chapter explains that gravitational attraction follows "
+                "an inverse-square dependence on distance and that ideal "
+                "bound orbits are ellipses. This game's dotted path is a "
+                "simplified 2D arcade approximation.\n\n"
+                "For a rocket burn, the ideal Tsiolkovsky equation is "
+                "`Δv = I_sp g_0 ln(m_0 / m_f)`, where `I_sp` is specific "
+                "impulse, `g_0` standard gravity, and `m_0`/`m_f` are initial "
+                "and final vehicle mass. Here, launch success uses a game "
+                "upthrust score rather than a calculated Δv budget. NASA Glenn "
+                "derives this from momentum while accounting for changing "
+                "rocket mass; its ideal form neglects aerodynamic lift and drag."
+            )
+            st.markdown(
+                "**Further reading:** "
+                "[NASA Glenn Research Center — Ideal Rocket Equation]"
+                "(https://www1.grc.nasa.gov/beginners-guide-to-aeronautics/ideal-rocket-equation/) · "
+                "[NASA — Introduction to Orbital Mechanics and Spacecraft Attitudes]"
+                "(https://tfaws.nasa.gov/wp-content/uploads/Rickman-Presentation.pdf) · "
+                "[NASA JPL — Basics of Space Flight: Gravity & Mechanics]"
+                "(https://science.nasa.gov/learn/basics-of-space-flight/chapter3-1/)"
+            )
         slingshot_event = gravity_slingshot(
             destination=st.session_state.mission_destination,
             bodies=route_bodies,
@@ -2445,6 +2530,26 @@ with configuration:
             _show_arrival_screen()
         elif st.session_state.flight_status in ("landing", "landed", "crashed"):
             st.subheader("Phase 5 — Landing Control")
+            with st.expander("Real physics: thrust, fuel, and touchdown"):
+                st.markdown(
+                    "A real powered descent follows the vehicle's equations "
+                    "of motion: net acceleration depends on thrust, gravity, "
+                    "and any aerodynamic forces (`F_net = m a`). Propellant "
+                    "consumption and achievable velocity change depend on "
+                    "engine specific impulse and changing vehicle mass, as "
+                    "expressed by `Δv = I_sp g_0 ln(m_0 / m_f)`. Atmospheric "
+                    "landings must additionally manage drag and heating. This "
+                    "minigame instead uses a fixed arcade thrust acceleration, "
+                    "scaled planetary gravity, and a simplified fuel rate; "
+                    "these values are not operational guidance."
+                )
+                st.markdown(
+                    "**Further reading:** "
+                    "[NASA Glenn Research Center — Ideal Rocket Equation]"
+                    "(https://www1.grc.nasa.gov/beginners-guide-to-aeronautics/ideal-rocket-equation/) · "
+                    "[NASA — Introduction to Orbital Mechanics and Spacecraft Attitudes]"
+                    "(https://tfaws.nasa.gov/wp-content/uploads/Rickman-Presentation.pdf)"
+                )
             _show_landing_controls()
 
 with status:

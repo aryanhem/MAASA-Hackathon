@@ -140,13 +140,23 @@ class StreamlitAppTests(unittest.TestCase):
 
     def test_launch_site_and_theme_choices_update_map(self):
         self.app.selectbox(key="launch_site_picker").select(
-            "Kennedy Space Center"
+            "Guiana Space Centre"
         ).run()
         self.assertEqual(
             self.app.session_state["selected_launch_site"],
-            "Kennedy Space Center",
+            "Guiana Space Centre",
         )
+        self.assertTrue(
+            any(
+                "https://centrespatialguyanais.cnes.fr/en" in item.value
+                for item in self.app.markdown
+            )
+        )
+        self.assertTrue(any("Europe's Spaceport" in item.value for item in self.app.caption))
 
+        self.app.selectbox(key="launch_site_picker").select(
+            "Kennedy Space Center"
+        ).run()
         self.app.selectbox(key="visual_theme").select("Arctic Pulse").run()
         figure = json.loads(self.app.get("plotly_chart")[0].proto.spec)
         self.assertEqual(figure["data"][0]["line"]["color"], "#68d9ff")
@@ -293,6 +303,19 @@ class StreamlitAppTests(unittest.TestCase):
         self.assertTrue(
             any("Drag backward from the rocket" in item.value
                 for item in self.app.caption)
+        )
+        self.assertTrue(
+            any(
+                item.label == "Real physics: gravity assists and rocket Δv"
+                for item in self.app.expander
+            )
+        )
+        phase_markdown = "\n".join(item.value for item in self.app.markdown)
+        self.assertIn("inverse-square dependence on distance", phase_markdown)
+        self.assertIn("conservation of energy and momentum", phase_markdown)
+        self.assertIn(
+            "https://science.nasa.gov/learn/basics-of-space-flight/chapter3-1/",
+            phase_markdown,
         )
 
         self._submit_successful_slingshot()
@@ -496,6 +519,18 @@ class StreamlitAppTests(unittest.TestCase):
             / "index.html"
         )
         canvas = canvas_path.read_text(encoding="utf-8")
+        self.assertTrue(
+            any(
+                item.label == "Real physics: thrust, fuel, and touchdown"
+                for item in self.app.expander
+            )
+        )
+        landing_markdown = "\n".join(item.value for item in self.app.markdown)
+        self.assertIn("changing vehicle mass", landing_markdown)
+        self.assertIn(
+            "https://www1.grc.nasa.gov/beginners-guide-to-aeronautics/ideal-rocket-equation/",
+            landing_markdown,
+        )
         for expected in (
             "Neptune:",
             "drawGauge",
@@ -647,7 +682,30 @@ class StreamlitAppTests(unittest.TestCase):
 
     def test_sidebar_presets_load_mission_and_play_menu_cue(self):
         self.assertEqual(self.app.sidebar.slider(key="interface_volume").value, 35)
-        self.assertEqual(len(self.app.sidebar.expander), 1)
+        sidebar_expanders = list(self.app.sidebar.expander)
+        self.assertEqual(len(sidebar_expanders), 2)
+        self.assertEqual(
+            {expander.label for expander in sidebar_expanders},
+            {"About NASA Space Apps", "Simulation Fidelity & Engineering Assumptions"},
+        )
+        self.assertTrue(
+            any("Super Intelligence (SI/AI)" in item.value for item in self.app.sidebar.caption)
+        )
+        self.assertTrue(
+            any("Atmospheric drag" in item.value for item in self.app.sidebar.markdown)
+        )
+        sidebar_markdown = "\n".join(
+            item.value for item in self.app.sidebar.markdown
+        )
+        for source in (
+            "https://www1.grc.nasa.gov/beginners-guide-to-aeronautics/ideal-rocket-equation/",
+            "https://tfaws.nasa.gov/wp-content/uploads/Rickman-Presentation.pdf",
+            "https://science.nasa.gov/learn/basics-of-space-flight/chapter3-1/",
+            "Kepler's laws",
+            "attitude",
+        ):
+            with self.subTest(source=source):
+                self.assertIn(source, sidebar_markdown)
 
         self.app.sidebar.button(key="beginner_preset").click().run()
         self.assertEqual(self.app.session_state["mission_phase"], 2)
