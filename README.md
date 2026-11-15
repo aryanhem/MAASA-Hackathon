@@ -25,7 +25,7 @@ Phase 1: Launch & Destination Selection
 
 Phase 2: Spacecraft Assembly
 
-* Players select their hull, solar equipment, thermal protection, avionics, instruments, engine, and fuel tank. We built a live inline-SVG schematic that updates dynamically as parts are added (changing fuselage textures, adding solar arrays, or showing circuit-board details—complete with hover tooltips). Once the build meets the required upthrust, Phase 3 unlocks.
+* Players select their hull, solar equipment, thermal protection, avionics, instruments, engine, and fuel tank. We built a live inline-SVG schematic that updates dynamically as parts are added (changing fuselage textures, adding solar arrays, or showing circuit-board details complete with hover tooltips). Once the build meets the required upthrust, Phase 3 unlocks.
 
 Phase 3: Gravitational Slingshot
 
