@@ -341,18 +341,65 @@
 
       function playControlCue(frequency) {
         const AudioContext = window.AudioContext || window.webkitAudioContext;
-        if (!AudioContext) return;
+        const volume = clamp(Number(args && args.sound_volume) / 100, 0, 1);
+        if (!AudioContext || volume <= 0) return;
         const context = new AudioContext();
         const oscillator = context.createOscillator();
         const gain = context.createGain();
         oscillator.frequency.value = frequency;
-        gain.gain.setValueAtTime(.035, context.currentTime);
+        gain.gain.setValueAtTime(.05 * volume, context.currentTime);
         gain.gain.exponentialRampToValueAtTime(.001, context.currentTime + .12);
         oscillator.connect(gain);
         gain.connect(context.destination);
         oscillator.start();
         oscillator.stop(context.currentTime + .12);
         oscillator.onended = () => context.close();
+      }
+
+      function playJetFuelCue() {
+        const AudioContext = window.AudioContext || window.webkitAudioContext;
+        const volume = clamp(Number(args && args.sound_volume) / 100, 0, 1);
+        if (!AudioContext || volume <= 0) return;
+
+        const context = new AudioContext();
+        const now = context.currentTime;
+        const master = context.createGain();
+        master.gain.setValueAtTime(.0001, now);
+        master.gain.exponentialRampToValueAtTime(.16 * volume, now + .04);
+        master.gain.exponentialRampToValueAtTime(.0001, now + .72);
+        master.connect(context.destination);
+
+        const rumble = context.createOscillator();
+        const rumbleGain = context.createGain();
+        rumble.type = "sawtooth";
+        rumble.frequency.setValueAtTime(115, now);
+        rumble.frequency.exponentialRampToValueAtTime(58, now + .65);
+        rumbleGain.gain.value = .45;
+        rumble.connect(rumbleGain);
+        rumbleGain.connect(master);
+        rumble.start(now);
+        rumble.stop(now + .72);
+
+        const sampleCount = Math.floor(context.sampleRate * .72);
+        const noiseBuffer = context.createBuffer(1, sampleCount, context.sampleRate);
+        const noiseData = noiseBuffer.getChannelData(0);
+        for (let i = 0; i < sampleCount; i++) {
+          noiseData[i] = Math.random() * 2 - 1;
+        }
+        const noise = context.createBufferSource();
+        const filter = context.createBiquadFilter();
+        const noiseGain = context.createGain();
+        noise.buffer = noiseBuffer;
+        filter.type = "lowpass";
+        filter.frequency.setValueAtTime(950, now);
+        filter.frequency.exponentialRampToValueAtTime(360, now + .65);
+        noiseGain.gain.value = .18;
+        noise.connect(filter);
+        filter.connect(noiseGain);
+        noiseGain.connect(master);
+        noise.start(now);
+        noise.stop(now + .72);
+        noise.onended = () => context.close();
       }
 
       function setBurning(value) {
@@ -367,7 +414,7 @@
         } else {
           playControlCue(520);
         }
-        if (burning) playControlCue(185);
+        if (burning) playJetFuelCue();
         setFuelButton();
       }
 

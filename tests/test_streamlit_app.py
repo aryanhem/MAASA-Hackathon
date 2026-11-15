@@ -473,9 +473,47 @@ class StreamlitAppTests(unittest.TestCase):
             for item in self.app.metric
             if item.label == "Total Mission Score"
         )
-        self.assertEqual(total_score, "133.0")
+        self.assertEqual(total_score, "134.3")
         self.assertEqual(self.app.session_state["slingshot_bodies_orbited"], 0)
         self.assertFalse(self.app.exception)
+
+    def test_branding_destination_classification_and_score_explanation(self):
+        self.assertTrue(any("Project M.A.A.S.A" in item.value for item in self.app.title))
+        self.assertTrue(
+            any("Space Mission Designer" in item.value for item in self.app.caption)
+        )
+        self.assertTrue(
+            any(
+                item.label == "Destination celestial body"
+                for item in self.app.selectbox
+            )
+        )
+        source = (Path(__file__).resolve().parents[1] / "app.py").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn('alt="Project M.A.A.S.A logo"', source)
+        self.assertIn("width=112", source)
+        self.assertIn("Moon (natural satellite)", source)
+        self.assertIn("destination difficulty", source)
+        self.assertIn("0.85× penalty", source)
+        self.assertTrue(
+            (Path(__file__).resolve().parents[1] / "assets" / "maasa-logo.png").is_file()
+        )
+
+    def test_phase_two_recovers_when_saved_location_is_missing(self):
+        self.app.session_state["mission_phase"] = 2
+        self.app.session_state["selected_launch_site"] = None
+        self.app.session_state["mission_destination"] = None
+        self.app.run()
+
+        self.assertFalse(self.app.exception)
+        self.assertEqual(self.app.session_state["mission_phase"], 1)
+        self.assertTrue(
+            any(
+                "missing a valid destination" in item.value
+                for item in self.app.warning
+            )
+        )
 
     def test_landing_failure_allows_one_retry_then_shows_diagnostics(self):
         self._advance_to_arrival("beginner_preset")
@@ -550,8 +588,14 @@ class StreamlitAppTests(unittest.TestCase):
             "TOUCHDOWN CONFIRMED",
             "LANDING FAILED",
             "ResizeObserver",
+            "function playJetFuelCue()",
+            "if (burning) playJetFuelCue()",
         ):
             self.assertIn(expected, canvas)
+        app_source = (
+            Path(__file__).resolve().parents[1] / "app.py"
+        ).read_text(encoding="utf-8")
+        self.assertIn("sound_volume=st.session_state.interface_volume", app_source)
         self.assertNotIn("STEP_HEARTBEAT_S", canvas)
         self.assertEqual(canvas.count("sendSnapshot();"), 1)
         self.assertIn("landing_canvas", self.app.session_state)
@@ -681,7 +725,7 @@ class StreamlitAppTests(unittest.TestCase):
         self.assertFalse(self.app.exception)
 
     def test_sidebar_presets_load_mission_and_play_menu_cue(self):
-        self.assertEqual(self.app.sidebar.slider(key="interface_volume").value, 35)
+        self.assertEqual(self.app.sidebar.slider(key="interface_volume").value, 50)
         sidebar_expanders = list(self.app.sidebar.expander)
         self.assertEqual(len(sidebar_expanders), 2)
         self.assertEqual(
@@ -771,7 +815,7 @@ class StreamlitAppTests(unittest.TestCase):
         self.assertEqual(self.app.session_state["mission_components"], {})
         self.assertIsNone(self.app.session_state["mission_engine"])
         self.assertIsNone(self.app.session_state["mission_fuel_tank"])
-        self.assertEqual(self.app.sidebar.slider(key="interface_volume").value, 35)
+        self.assertEqual(self.app.sidebar.slider(key="interface_volume").value, 50)
         self.assertEqual(self.app.metric[0].value, "0 kg")
         self.assertFalse(self.app.exception)
 

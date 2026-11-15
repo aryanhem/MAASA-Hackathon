@@ -148,33 +148,59 @@ class MissionDesignTests(unittest.TestCase):
         score = calculate_mission_score(
             self.components,
             "Kennedy Space Center",
+            "Mars",
             2,
             remaining_fuel_kg=500,
             starting_fuel_kg=1000,
+            slingshot_attempts=1,
+            landing_attempts=1,
         )
 
         self.assertEqual(score.research_points, 38)
         self.assertEqual(score.launch_difficulty_multiplier, 1.5)
+        self.assertEqual(score.destination_difficulty_multiplier, 1.05)
         self.assertEqual(score.slingshot_body_bonus, 1.4)
         self.assertEqual(score.fuel_efficiency_bonus, 50)
-        self.assertEqual(score.total_score, 129.8)
+        self.assertEqual(score.retry_penalty_multiplier, 1.0)
+        self.assertEqual(score.total_score, 133.8)
+
+    def test_second_attempts_apply_individual_score_penalties(self):
+        score = calculate_mission_score(
+            self.components,
+            "Kennedy Space Center",
+            "Mars",
+            2,
+            remaining_fuel_kg=500,
+            starting_fuel_kg=1000,
+            slingshot_attempts=2,
+            landing_attempts=2,
+        )
+
+        self.assertEqual(score.retry_penalty_multiplier, 0.85**2)
+        self.assertEqual(score.total_score, 96.7)
 
     def test_mission_score_rejects_missing_components_and_invalid_fuel(self):
         with self.assertRaisesRegex(ValueError, "Select a power component"):
             calculate_mission_score(
                 {"hull": self.components["hull"]},
                 "Guiana Space Centre",
+                "Moon",
                 0,
                 100,
                 100,
+                1,
+                1,
             )
         with self.assertRaisesRegex(ValueError, "between zero and starting fuel"):
             calculate_mission_score(
                 self.components,
                 "Guiana Space Centre",
+                "Moon",
                 0,
                 101,
                 100,
+                1,
+                1,
             )
 
     def test_app_imports_are_defined_and_exported_with_compatible_signatures(self):

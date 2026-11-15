@@ -191,8 +191,9 @@ THEMES = {
     },
 }
 
-DEFAULT_VOLUME = 35
+DEFAULT_VOLUME = 50
 SOUND_SAMPLE_RATE = 22050
+LOGO_PATH = Path(__file__).parent / "assets" / "maasa-logo.png"
 
 ORBITAL_RADIUS_AU = {
     "Mercury": 0.39,
@@ -227,6 +228,8 @@ LANDING_MIN_GRAVITY_FRACTION = 0.15
 LANDING_MAX_ATTEMPTS = 2
 SLINGSHOT_MAX_ATTEMPTS = 2
 SLINGSHOT_FUEL_COST_PER_BODY = 0.04
+SECOND_ATTEMPT_SCORE_MULTIPLIER = 0.85
+DESTINATION_DIFFICULTY_SCORE_WEIGHT = 0.05
 COMPONENT_RESEARCH_POINTS = {
     "hull": {
         "Lightweight Aluminum Frame": 10,
@@ -265,9 +268,12 @@ LAUNCH_SITE_SCORE_MULTIPLIERS = {
 def calculate_mission_score(
     selected_components: dict[str, Optional[str]],
     launch_site: str,
+    destination: str,
     bodies_orbited: int,
     remaining_fuel_kg: float,
     starting_fuel_kg: float,
+    slingshot_attempts: int,
+    landing_attempts: int,
 ) -> dict[str, float]:
     """Score the mission locally so app.py tolerates an older deployed data module."""
     research_points = 0.0
@@ -287,6 +293,11 @@ def calculate_mission_score(
     except KeyError as error:
         raise ValueError(f"Unknown launch site for scoring: {launch_site!r}.") from error
 
+    try:
+        destination_difficulty = DESTINATION_DIFFICULTY[destination]
+    except KeyError as error:
+        raise ValueError(f"Unknown destination for scoring: {destination!r}.") from error
+
     if (
         not isinstance(bodies_orbited, int)
         or isinstance(bodies_orbited, bool)
@@ -302,18 +313,40 @@ def calculate_mission_score(
         raise ValueError("Fuel values must be finite numbers of kilograms.")
     if starting_fuel_kg <= 0 or not 0 <= remaining_fuel_kg <= starting_fuel_kg:
         raise ValueError("Remaining fuel must be between zero and starting fuel.")
+    attempts = (slingshot_attempts, landing_attempts)
+    if any(
+        not isinstance(value, int)
+        or isinstance(value, bool)
+        or not 1 <= value <= LANDING_MAX_ATTEMPTS
+        for value in attempts
+    ):
+        raise ValueError("Each completed minigame must use one or two attempts.")
 
     body_bonus = 1.0 + 0.2 * bodies_orbited
+    destination_multiplier = (
+        1.0 + DESTINATION_DIFFICULTY_SCORE_WEIGHT * destination_difficulty
+    )
+    retry_count = sum(value - 1 for value in attempts)
+    retry_penalty_multiplier = SECOND_ATTEMPT_SCORE_MULTIPLIER**retry_count
     fuel_percentage = remaining_fuel_kg / starting_fuel_kg * 100
     return {
         "research_points": research_points,
         "launch_difficulty_multiplier": launch_multiplier,
+        "destination_difficulty_multiplier": destination_multiplier,
         "bodies_orbited": float(bodies_orbited),
         "slingshot_body_bonus": body_bonus,
         "fuel_remaining_percentage": fuel_percentage,
         "fuel_efficiency_bonus": fuel_percentage,
+        "retry_penalty_multiplier": retry_penalty_multiplier,
         "total_score": round(
-            research_points * launch_multiplier * body_bonus + fuel_percentage,
+            (
+                research_points
+                * launch_multiplier
+                * destination_multiplier
+                * body_bonus
+                + fuel_percentage
+            )
+            * retry_penalty_multiplier,
             1,
         ),
     }
@@ -1277,8 +1310,8 @@ def _show_mission_status(
         )
 
 
-def _planet_appearance(destination: str) -> tuple[str, str, str]:
-    """Return visual surface colors and clipped detail for a stylized planet."""
+def _celestial_body_appearance(destination: str) -> tuple[str, str, str]:
+    """Return surface colors and details for a stylized destination body."""
     appearances = {
         "Moon": (
             "#cbd0d4",
@@ -1383,7 +1416,7 @@ def _build_starfield_animation(
         "</circle>"
         for index in range(72)
     )
-    planet_light, planet_dark, planet_detail = _planet_appearance(destination)
+    planet_light, planet_dark, planet_detail = _celestial_body_appearance(destination)
     saturn_rings = (
         """
         <ellipse cx="678" cy="190" rx="72" ry="24" fill="none"
@@ -1665,9 +1698,12 @@ def _show_victory_scorecard() -> None:
             score = calculate_mission_score(
                 st.session_state.mission_components,
                 st.session_state.selected_launch_site,
+                st.session_state.mission_destination,
                 st.session_state.get("slingshot_bodies_orbited", 0),
                 st.session_state.flight_fuel_remaining_kg,
                 st.session_state.flight_fuel_capacity_kg,
+                st.session_state.get("slingshot_attempt_number", 1),
+                st.session_state.get("landing_attempt_number", 1),
             )
         except (KeyError, TypeError, ValueError) as error:
             st.error(f"Mission succeeded, but its score could not be calculated: {error}")
@@ -1683,18 +1719,34 @@ def _show_victory_scorecard() -> None:
                 f"{score['launch_difficulty_multiplier']:.1f}×",
             )
             breakdown[2].metric(
+                "Destination difficulty",
+                f"{score['destination_difficulty_multiplier']:.2f}×",
+            )
+            breakdown[3].metric(
                 "Slingshot body bonus",
                 f"{score['slingshot_body_bonus']:.1f}×",
                 f"{int(score['bodies_orbited'])} gravity assists",
             )
-            breakdown[3].metric(
+            efficiency, retries = st.columns(2)
+            efficiency.metric(
                 "Fuel efficiency bonus",
                 f"+{score['fuel_efficiency_bonus']:.1f} pts",
                 f"{score['fuel_remaining_percentage']:.1f}% remaining",
             )
+            retries.metric(
+                "Retry multiplier",
+                f"{score['retry_penalty_multiplier']:.2f}×",
+                (
+                    f"Slingshot {st.session_state.slingshot_attempt_number}/2 · "
+                    f"Landing {st.session_state.landing_attempt_number}/2 attempts"
+                ),
+            )
             st.caption(
-                "Score = research × launch-site risk × gravity-assist bonus "
-                "+ fuel remaining percentage."
+                "Score = ((research × launch risk × destination difficulty × "
+                "gravity-assist bonus) + fuel remaining %) × retry multiplier. "
+                "Heavier research-focused equipment earns more research points; "
+                "each gravity assist adds 0.2× and costs 4% of tank fuel. "
+                "A second attempt in either minigame applies a 0.85× penalty."
             )
 
         st.markdown("### Touchdown telemetry")
@@ -2044,6 +2096,7 @@ def _show_landing_controls() -> None:
                 _landing_gravity(destination)
             ),
             gravity_m_s2=_landing_gravity(destination),
+            sound_volume=st.session_state.interface_volume,
             status=st.session_state.flight_status,
             result=st.session_state.get("flight_result"),
             score=st.session_state.get("landing_score"),
@@ -2075,7 +2128,11 @@ def _show_arrival_screen() -> None:
     )
 
 
-st.set_page_config(page_title="Mission Design", page_icon="🚀", layout="wide")
+st.set_page_config(
+    page_title="Project M.A.A.S.A",
+    page_icon=str(LOGO_PATH),
+    layout="wide",
+)
 
 for key, default in (
     ("mission_phase", 1),
@@ -2110,7 +2167,7 @@ st.sidebar.slider(
     min_value=0,
     max_value=100,
     key="interface_volume",
-    help="Set menu sound effects volume to 0 to mute them.",
+    help="Set to 0 to mute menu and landing fuel-jet sounds.",
     on_change=_queue_menu_action_sound,
 )
 
@@ -2193,13 +2250,65 @@ st.sidebar.caption(
 theme = THEMES[st.session_state.visual_theme]
 _apply_theme(theme)
 
-st.title("Space Mission Design")
+with st.container(
+    horizontal=True,
+    wrap=False,
+    vertical_alignment="center",
+    gap="small",
+):
+    st.image(
+        str(LOGO_PATH),
+        width=112,
+        alt="Project M.A.A.S.A logo",
+    )
+    with st.container():
+        st.title("Project M.A.A.S.A")
+        st.caption("Space Mission Designer")
+if not st.session_state.get("intro_animation_shown", False):
+    st.html(
+        f"""
+        <style>
+          @keyframes maasa-startup {{
+            0% {{ opacity: 0; transform: translateY(4px); }}
+            18% {{ opacity: 1; transform: translateY(0); }}
+            82% {{ opacity: 1; }}
+            100% {{ opacity: 0; transform: translateY(-2px); }}
+          }}
+          .maasa-startup {{
+            color: {theme["accent"]};
+            font: 600 12px/1.5 system-ui, sans-serif;
+            letter-spacing: .12em;
+            text-transform: uppercase;
+            animation: maasa-startup 2.4s ease-out both;
+          }}
+          @media (prefers-reduced-motion: reduce) {{
+            .maasa-startup {{ animation: none; }}
+          }}
+        </style>
+        <div class="maasa-startup" role="status">Mission control online</div>
+        """,
+        width="content",
+    )
+    st.session_state.intro_animation_shown = True
 st.caption(
     "Choose a destination, build a spacecraft, then fly and land. The right-hand panel updates the "
     "spacecraft mass and upthrust progress as you make selections."
 )
 
-configuration, status = st.columns([2, 1], gap="large")
+has_valid_destination = (
+    st.session_state.mission_destination in DESTINATION_DIFFICULTY
+)
+if st.session_state.mission_phase > 1 and not has_valid_destination:
+    st.session_state.mission_phase = 1
+    st.warning(
+        "This saved mission is missing a valid destination. "
+        "Choose one again to continue."
+    )
+
+configuration, status = st.columns(
+    [3, 1] if st.session_state.mission_phase == 2 else [2, 1],
+    gap="large",
+)
 selected_components = dict(st.session_state.mission_components)
 engine = st.session_state.mission_engine
 fuel_tank = st.session_state.mission_fuel_tank
@@ -2236,9 +2345,14 @@ with configuration:
         st.session_state.last_map_selection = map_signature
 
         site_options = [None, *LAUNCH_SITES]
-        if "launch_site_picker" not in st.session_state:
+        if (
+            "launch_site_picker" not in st.session_state
+            or st.session_state.launch_site_picker not in site_options
+        ):
             st.session_state.launch_site_picker = (
                 st.session_state.selected_launch_site
+                if st.session_state.selected_launch_site in LAUNCH_SITES
+                else None
             )
         selected_site = st.selectbox(
             "Launch site",
@@ -2259,14 +2373,25 @@ with configuration:
             )
 
         destination_options = [None, *DESTINATION_DIFFICULTY]
-        if "destination_picker" not in st.session_state:
-            st.session_state.destination_picker = st.session_state.mission_destination
+        if (
+            "destination_picker" not in st.session_state
+            or st.session_state.destination_picker not in destination_options
+        ):
+            st.session_state.destination_picker = (
+                st.session_state.mission_destination
+                if st.session_state.mission_destination in DESTINATION_DIFFICULTY
+                else None
+            )
         st.selectbox(
-            "Target planet",
+            "Destination celestial body",
             destination_options,
             key="destination_picker",
             on_change=_update_destination_from_picker,
-            format_func=lambda value: value or "Choose a destination",
+            format_func=lambda value: (
+                "Moon (natural satellite)"
+                if value == "Moon"
+                else (value or "Choose a destination body")
+            ),
         )
         st.session_state.mission_destination = st.session_state.destination_picker
 

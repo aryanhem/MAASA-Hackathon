@@ -192,10 +192,12 @@ class MissionResult:
 class MissionScore:
     research_points: float
     launch_difficulty_multiplier: float
+    destination_difficulty_multiplier: float
     bodies_orbited: int
     slingshot_body_bonus: float
     fuel_remaining_percentage: float
     fuel_efficiency_bonus: float
+    retry_penalty_multiplier: float
     total_score: float
 
 
@@ -296,9 +298,12 @@ def evaluate_mission(
 def calculate_mission_score(
     selected_components: Mapping[str, Optional[str]],
     launch_site: str,
+    destination: str,
     bodies_orbited: int,
     remaining_fuel_kg: float,
     starting_fuel_kg: float,
+    slingshot_attempts: int,
+    landing_attempts: int,
 ) -> MissionScore:
     """Score the arcade mission from research choices, risk, flybys, and fuel."""
     research_points = 0.0
@@ -317,6 +322,10 @@ def calculate_mission_score(
         launch_multiplier = LAUNCH_SITE_DIFFICULTY_MULTIPLIERS[launch_site]
     except KeyError as error:
         raise ValueError(f"Unknown launch site for scoring: {launch_site!r}.") from error
+    try:
+        destination_difficulty = DESTINATION_DIFFICULTY[destination]
+    except KeyError as error:
+        raise ValueError(f"Unknown destination for scoring: {destination!r}.") from error
 
     if (
         not isinstance(bodies_orbited, int)
@@ -334,16 +343,31 @@ def calculate_mission_score(
         raise ValueError("Fuel values must be finite numbers of kilograms.")
     if starting_fuel_kg <= 0 or not 0 <= remaining_fuel_kg <= starting_fuel_kg:
         raise ValueError("Remaining fuel must be between zero and starting fuel.")
+    attempts = (slingshot_attempts, landing_attempts)
+    if any(
+        not isinstance(value, int)
+        or isinstance(value, bool)
+        or not 1 <= value <= 2
+        for value in attempts
+    ):
+        raise ValueError("Each completed minigame must use one or two attempts.")
 
     body_bonus = 1.0 + 0.2 * bodies_orbited
+    destination_multiplier = 1.0 + 0.05 * destination_difficulty
+    retry_penalty = 0.85 ** sum(value - 1 for value in attempts)
     fuel_percentage = remaining_fuel_kg / starting_fuel_kg * 100
-    total_score = research_points * launch_multiplier * body_bonus + fuel_percentage
+    total_score = (
+        research_points * launch_multiplier * destination_multiplier * body_bonus
+        + fuel_percentage
+    ) * retry_penalty
     return MissionScore(
         research_points=research_points,
         launch_difficulty_multiplier=launch_multiplier,
+        destination_difficulty_multiplier=destination_multiplier,
         bodies_orbited=bodies_orbited,
         slingshot_body_bonus=body_bonus,
         fuel_remaining_percentage=fuel_percentage,
         fuel_efficiency_bonus=fuel_percentage,
+        retry_penalty_multiplier=retry_penalty,
         total_score=round(total_score, 1),
     )
