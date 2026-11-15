@@ -1,5 +1,9 @@
+import ast
+import inspect
 import unittest
+from pathlib import Path
 
+import mission_design
 from mission_design import (
     COMPONENT_CHOICES,
     DESTINATION_DIFFICULTY,
@@ -172,6 +176,41 @@ class MissionDesignTests(unittest.TestCase):
                 101,
                 100,
             )
+
+    def test_app_imports_are_defined_and_exported_with_compatible_signatures(self):
+        app_path = Path(__file__).resolve().parents[1] / "app.py"
+        app_tree = ast.parse(app_path.read_text(encoding="utf-8"))
+        app_imports = {
+            alias.name
+            for node in app_tree.body
+            if isinstance(node, ast.ImportFrom)
+            and node.module == "mission_design"
+            for alias in node.names
+        }
+
+        self.assertTrue(app_imports)
+        self.assertLessEqual(app_imports, set(mission_design.__all__))
+        for name in app_imports:
+            with self.subTest(import_name=name):
+                self.assertTrue(hasattr(mission_design, name))
+
+        inspect.signature(mission_design.calculate_required_upthrust).bind(
+            1000, "Guiana Space Centre", "Moon"
+        )
+        inspect.signature(mission_design.evaluate_mission).bind(
+            {}, "Standard Kerolox Engine", "Small Reserve Tank",
+            "Guiana Space Centre", "Moon",
+        )
+        inspect.signature(mission_design.calculate_mission_score).bind(
+            {
+                category: next(iter(choices))
+                for category, choices in COMPONENT_CHOICES.items()
+            },
+            "Guiana Space Centre",
+            0,
+            100,
+            100,
+        )
 
 
 if __name__ == "__main__":
