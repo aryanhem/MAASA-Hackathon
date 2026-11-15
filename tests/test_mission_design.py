@@ -189,10 +189,15 @@ class MissionDesignTests(unittest.TestCase):
         }
 
         self.assertTrue(app_imports)
+        self.assertNotIn("calculate_mission_score", app_imports)
         self.assertLessEqual(app_imports, set(mission_design.__all__))
         for name in app_imports:
             with self.subTest(import_name=name):
                 self.assertTrue(hasattr(mission_design, name))
+        app_functions = {
+            node.name for node in app_tree.body if isinstance(node, ast.FunctionDef)
+        }
+        self.assertIn("calculate_mission_score", app_functions)
 
         inspect.signature(mission_design.calculate_required_upthrust).bind(
             1000, "Guiana Space Centre", "Moon"
@@ -200,16 +205,6 @@ class MissionDesignTests(unittest.TestCase):
         inspect.signature(mission_design.evaluate_mission).bind(
             {}, "Standard Kerolox Engine", "Small Reserve Tank",
             "Guiana Space Centre", "Moon",
-        )
-        inspect.signature(mission_design.calculate_mission_score).bind(
-            {
-                category: next(iter(choices))
-                for category, choices in COMPONENT_CHOICES.items()
-            },
-            "Guiana Space Centre",
-            0,
-            100,
-            100,
         )
 
 

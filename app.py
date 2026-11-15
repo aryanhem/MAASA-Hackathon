@@ -23,7 +23,6 @@ from mission_design import (
     HULL_MINIMUM_BY_DESTINATION,
     LAUNCHPAD_MODIFIERS,
     LAUNCH_SITES,
-    calculate_mission_score,
     evaluate_mission,
 )
 from slingshot import simulate_trajectory, trajectory_bodies
@@ -228,6 +227,96 @@ LANDING_MIN_GRAVITY_FRACTION = 0.15
 LANDING_MAX_ATTEMPTS = 2
 SLINGSHOT_MAX_ATTEMPTS = 2
 SLINGSHOT_FUEL_COST_PER_BODY = 0.04
+COMPONENT_RESEARCH_POINTS = {
+    "hull": {
+        "Lightweight Aluminum Frame": 10,
+        "Carbon-Composite Shell": 20,
+        "Reinforced Titanium-Alloy Hull": 30,
+    },
+    "power": {
+        "Standard Solar Array Panels": 8,
+        "High-Efficiency Deep-Space Solar Wings": 16,
+        "Radioisotope Thermoelectric Generator (RTG)": 20,
+    },
+    "avionics": {
+        "Basic Sun & Earth Sensors": 5,
+        "Advanced IMU & Star Tracker": 12,
+        "Redundant Deep-Space Command Computer": 20,
+    },
+    "thermal": {
+        "Passive MLI Insulation Blankets": 5,
+        "Active Fluid-Loop Heat Exchangers": 12,
+        "Ablative Thermal Protection System (TPS) Shield": 20,
+    },
+    "instruments": {
+        "Optical Imaging Camera Suite": 10,
+        "Geological Drill & Sample Spectrometer": 25,
+        "Atmospheric Gas Analyzer": 20,
+    },
+}
+LAUNCH_SITE_SCORE_MULTIPLIERS = {
+    "Guiana Space Centre": 1.0,
+    "Kennedy Space Center": 1.5,
+    "China Jiuquan Launch Center": 2.0,
+    "Baikonur Cosmodrome": 2.2,
+}
+
+
+def calculate_mission_score(
+    selected_components: dict[str, Optional[str]],
+    launch_site: str,
+    bodies_orbited: int,
+    remaining_fuel_kg: float,
+    starting_fuel_kg: float,
+) -> dict[str, float]:
+    """Score the mission locally so app.py tolerates an older deployed data module."""
+    research_points = 0.0
+    for category, weights in COMPONENT_RESEARCH_POINTS.items():
+        selection = selected_components.get(category)
+        if selection is None:
+            raise ValueError(f"Select a {category} component before scoring.")
+        try:
+            research_points += weights[selection]
+        except KeyError as error:
+            raise ValueError(
+                f"Unknown {category} component for research scoring: {selection!r}."
+            ) from error
+
+    try:
+        launch_multiplier = LAUNCH_SITE_SCORE_MULTIPLIERS[launch_site]
+    except KeyError as error:
+        raise ValueError(f"Unknown launch site for scoring: {launch_site!r}.") from error
+
+    if (
+        not isinstance(bodies_orbited, int)
+        or isinstance(bodies_orbited, bool)
+        or bodies_orbited < 0
+    ):
+        raise ValueError("The number of gravity-assist bodies must be a non-negative integer.")
+    if any(
+        isinstance(value, bool)
+        or not isinstance(value, (int, float))
+        or not math.isfinite(value)
+        for value in (remaining_fuel_kg, starting_fuel_kg)
+    ):
+        raise ValueError("Fuel values must be finite numbers of kilograms.")
+    if starting_fuel_kg <= 0 or not 0 <= remaining_fuel_kg <= starting_fuel_kg:
+        raise ValueError("Remaining fuel must be between zero and starting fuel.")
+
+    body_bonus = 1.0 + 0.2 * bodies_orbited
+    fuel_percentage = remaining_fuel_kg / starting_fuel_kg * 100
+    return {
+        "research_points": research_points,
+        "launch_difficulty_multiplier": launch_multiplier,
+        "bodies_orbited": float(bodies_orbited),
+        "slingshot_body_bonus": body_bonus,
+        "fuel_remaining_percentage": fuel_percentage,
+        "fuel_efficiency_bonus": fuel_percentage,
+        "total_score": round(
+            research_points * launch_multiplier * body_bonus + fuel_percentage,
+            1,
+        ),
+    }
 
 
 def _landing_gravity(destination: str) -> float:
@@ -1583,25 +1672,25 @@ def _show_victory_scorecard() -> None:
         except (KeyError, TypeError, ValueError) as error:
             st.error(f"Mission succeeded, but its score could not be calculated: {error}")
         else:
-            st.metric("Total Mission Score", f"{score.total_score:,.1f}")
+            st.metric("Total Mission Score", f"{score['total_score']:,.1f}")
             breakdown = st.columns(4)
             breakdown[0].metric(
                 "Research value",
-                f"{score.research_points:g} pts",
+                f"{score['research_points']:g} pts",
             )
             breakdown[1].metric(
                 "Launch-site risk",
-                f"{score.launch_difficulty_multiplier:.1f}×",
+                f"{score['launch_difficulty_multiplier']:.1f}×",
             )
             breakdown[2].metric(
                 "Slingshot body bonus",
-                f"{score.slingshot_body_bonus:.1f}×",
-                f"{score.bodies_orbited} gravity assists",
+                f"{score['slingshot_body_bonus']:.1f}×",
+                f"{int(score['bodies_orbited'])} gravity assists",
             )
             breakdown[3].metric(
                 "Fuel efficiency bonus",
-                f"+{score.fuel_efficiency_bonus:.1f} pts",
-                f"{score.fuel_remaining_percentage:.1f}% remaining",
+                f"+{score['fuel_efficiency_bonus']:.1f} pts",
+                f"{score['fuel_remaining_percentage']:.1f}% remaining",
             )
             st.caption(
                 "Score = research × launch-site risk × gravity-assist bonus "

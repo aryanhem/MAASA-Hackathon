@@ -445,6 +445,12 @@ class StreamlitAppTests(unittest.TestCase):
                 for item in self.app.metric
             )
         )
+        total_score = next(
+            item.value
+            for item in self.app.metric
+            if item.label == "Total Mission Score"
+        )
+        self.assertEqual(total_score, "133.0")
         self.assertEqual(self.app.session_state["slingshot_bodies_orbited"], 0)
         self.assertFalse(self.app.exception)
 
